@@ -31,11 +31,55 @@ export const money = (n: number | null, r: Rate): string =>
 
 export const totalIn = (s: Send): number => s.input + s.cacheRead + s.cacheWrite
 
-export const line = (s: Send, r: Rate): string =>
-  `輸入 ${num(totalIn(s))}（快取讀 ${num(s.cacheRead)}／寫 ${num(s.cacheWrite)}）· 輸出 ${num(s.output)} · ${money(s.usd, r)}`
-
 export const rateNote = (r: Rate): string =>
   `匯率 1 USD = ${r.twdPerUsd.toFixed(2)} TWD（${r.isLive ? '即時' : '設定值'}）`
+
+export const ntd = (n: number | null, r: Rate): string => (n === null ? '—' : `NT$${(n * r.twdPerUsd).toFixed(2)}`)
+
+export const compact = (n: number): string =>
+  n >= 1_000_000 ? `${(n / 1_000_000).toFixed(2)}M` : n >= 1_000 ? `${(n / 1_000).toFixed(1)}K` : String(Math.round(n))
+
+export const bar = (value: number, max: number, width = 10): string => {
+  const filled = max > 0 ? Math.round((value / max) * width) : 0
+
+  return '█'.repeat(filled) + '░'.repeat(width - filled)
+}
+
+export const hitRate = (s: Send): number => {
+  const all = totalIn(s)
+
+  return all > 0 ? s.cacheRead / all : 0
+}
+
+// The /tokens report: markdown, which every surface draws as a table.
+export const report = (list: readonly Send[], total: number | null, r: Rate): string => {
+  const recent = list.slice(-10)
+  const first = list.length - recent.length
+  const maxUsd = Math.max(0, ...recent.map(s => s.usd ?? 0))
+  const priced = list.filter(s => s.usd !== null)
+  const sum = priced.reduce((n, s) => n + (s.usd ?? 0), 0)
+  const average = priced.length > 0 ? sum / priced.length : null
+  const model = recent[recent.length - 1]?.model
+  const top = priced.reduce<Send | null>((a, s) => (a === null || (s.usd ?? 0) > (a.usd ?? 0) ? s : a), null)
+
+  const rows = recent.map((s, i) => {
+    const sub = s.subagentTurns > 0 ? ` +${s.subagentTurns}子` : ''
+
+    return `| ${first + i + 1} | ${compact(totalIn(s))} | ${Math.round(hitRate(s) * 100)}% | ${compact(s.output)} | \`${bar(s.usd ?? 0, maxUsd)}\` | **${s.usd === null ? '—' : `$${s.usd.toFixed(4)}`}** | ${ntd(s.usd, r)} | ${s.seconds}s${sub} |`
+  })
+
+  return [
+    `### 💰 本 session 累計 **${total === null ? 'US$—' : `US$${total.toFixed(4)}`}** · **${ntd(total, r)}**`,
+    '',
+    `共 ${list.length} 次送出 · 平均每次 ${average === null ? '—' : `US$${average.toFixed(4)}（${ntd(average, r)}）`}${top === null ? '' : ` · 最貴第 ${list.indexOf(top) + 1} 次 ${ntd(top.usd, r)}`}`,
+    '',
+    '| # | 輸入 | 快取命中 | 輸出 | 費用 | USD | 台幣 | 耗時 |',
+    '|--:|--:|--:|--:|:--|--:|--:|--:|',
+    ...rows,
+    '',
+    `_${rateNote(r)}${model ? ` · 模型 ${model}` : ''}_`,
+  ].join('\n')
+}
 
 const costNow = async ($: EngineInterface): Promise<number | null> => (await $.session.usage()).cost?.usd ?? null
 
@@ -89,9 +133,7 @@ export const register: Register = (on, options) => {
       return { text: '還沒有紀錄：送出一則訊息後再試。' }
     }
 
-    const rows = list.slice(-10).map((s, i) => `${i + 1}. ${line(s, r)} · ${s.seconds}s · ${s.model}`)
-
-    return { text: [...rows, `本 session 累計：${money(total, r)}`, rateNote(r)].join('\n') }
+    return { text: report(list, total, r) }
   })
 
   on('prompt.submit', async ($, e, next) => {
@@ -163,11 +205,19 @@ export const register: Register = (on, options) => {
     const { Box, Text } = $.ui.resolve(e)
 
     return (
-      <Box>
-        <Text dimColor>
-          上次送出：{line(last, r)}
-          {last.subagentTurns > 0 ? `（含子代理 ${last.subagentTurns} 回合）` : ''} ｜ 累計 {money(total, r)}
-        </Text>
+      <Box flexDirection="row">
+        <Text color="claude">◆ </Text>
+        <Text dimColor>上次 </Text>
+        <Text>{compact(totalIn(last))}</Text>
+        <Text dimColor> 入（快取 {Math.round(hitRate(last) * 100)}%）· </Text>
+        <Text>{compact(last.output)}</Text>
+        <Text dimColor> 出 · </Text>
+        <Text color="success" bold>{ntd(last.usd, r)}</Text>
+        <Text dimColor>{last.usd === null ? '' : ` US$${last.usd.toFixed(4)}`}</Text>
+        {last.subagentTurns > 0 ? <Text dimColor>（含子代理 {last.subagentTurns} 回合）</Text> : null}
+        <Text dimColor>  ｜ 累計 </Text>
+        <Text color="warning" bold>{ntd(total, r)}</Text>
+        <Text dimColor>  /tokens 看明細</Text>
       </Box>
     )
   })

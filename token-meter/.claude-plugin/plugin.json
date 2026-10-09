@@ -1,6 +1,6 @@
 {
   "name": "token-meter",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "每次送出後顯示該回合的 token 用量與費用（美元＋台幣），並提供 /tokens 查看歷史",
   "types": "./types/index.d.ts",
   "userConfig": {

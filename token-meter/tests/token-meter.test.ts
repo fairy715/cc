@@ -1,6 +1,8 @@
 import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 
+import { bar } from '../hooks/register'
+
 const usage = (input: number, output: number, read: number, write: number, model = 'claude-test') => ({
   input_tokens: input,
   output_tokens: output,
@@ -46,8 +48,9 @@ test('每次送出記錄 token 與費用差額，子代理一併加總，台幣�
   const out = await $.command.run({
     command: 'tokens', args: '', origin: composer, presentation: { isFullscreen: false, columns: 120 },
   })
-  expect(out.text).toContain('輸入 1,310（快取讀 1,000／寫 200）· 輸出 70 · US$0.2500（NT$8.00）')
-  expect(out.text).toContain('累計：US$1.7500（NT$56.00）')
+  expect(out.text).toContain('| 1 | 1.3K | 76% | 70 | `██████████` | **$0.2500** | NT$8.00 | 0s +1子 |')
+  expect(out.text).toContain('累計 **US$1.7500** · **NT$56.00**')
+  expect(out.text).toContain('共 1 次送出 · 平均每次 US$0.2500（NT$8.00） · 最貴第 1 次 NT$8.00')
   expect(out.text).toContain('匯率 1 USD = 32.00 TWD（設定值）')
 })
 
@@ -66,7 +69,7 @@ test('開啟即時匯率時用抓到的匯率', async ($, on) => {
   const out = await $.command.run({
     command: 'tokens', args: '', origin: composer, presentation: { isFullscreen: false, columns: 120 },
   })
-  expect(out.text).toContain('US$0.1000（NT$3.00）')
+  expect(out.text).toContain('| **$0.1000** | NT$3.00 |')
   expect(out.text).toContain('匯率 1 USD = 30.00 TWD（即時）')
 })
 
@@ -84,4 +87,36 @@ test('即時匯率抓取失敗時退回設定值', { options: { twdRate: 31 } },
     command: 'tokens', args: '', origin: composer, presentation: { isFullscreen: false, columns: 120 },
   })
   expect(out.text).toContain('匯率 1 USD = 31.00 TWD（設定值）')
+})
+
+test('長條圖依本頁最貴一次縮放', () => {
+  expect(bar(5, 10)).toBe('█████░░░░░')
+  expect(bar(0, 0)).toBe('░░░░░░░░░░')
+})
+
+test('輸入框上方一行在各介面都畫得出台幣費用', { options: { liveRate: false, twdRate: 32 } }, async ($, on) => {
+  const cost = { usd: 0 }
+  engine(on, cost, null)
+
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.prompt.submit({ text: 'hi', wait: false, origin: composer })
+  cost.usd = 0.25
+  await $.turn.complete({
+    answer: 'ok', durationMs: 1, isAborted: false, turnId: 't1',
+    reason: 'answer', usage: usage(100, 50, 900, 0),
+  })
+
+  for (const surface of ['terminal', 'desktop', 'mobile'] as const) {
+    const ui = await $.ui.mount({
+      plugin: 'token-meter', surface, component: 'AbovePrompt',
+      props: {
+        hasSurvey: false, isWorking: false, maxRows: 3, bodyColumns: 120,
+        scroll: { offset: 0, bodyRows: 40 }, view: {},
+      },
+    })
+    const drawn = JSON.stringify(await ui.drawn())
+    expect(drawn).toContain('NT$8.00')
+    expect(drawn).toContain('" 入（快取 ","90","%）· "')
+    await ui.unmount()
+  }
 })
