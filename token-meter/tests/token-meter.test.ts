@@ -16,14 +16,15 @@ const composer = { kind: 'composer' } as const
 const presentation = { isFullscreen: false, columns: 120 }
 const view = { scroll: { offset: 0, bodyRows: 40 }, view: {} }
 
-type World = { usd: number; contextPercent?: number; fiveHourUsed?: number; twd: number | null }
+type World = { usd: number; contextPercent?: number; fiveHourUsed?: number; twd: number | null; opened?: string[]; closed?: string[] }
 
 const engine = (on: On, world: World) => {
   mock.clock(on, { now: 1000 })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('ui.status', () => ({ value: undefined }))
-  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  on('ui.open', ($, e) => (world.opened?.push(e.id), { value: { isPlaced: true as const } }))
+  on('ui.close', ($, e) => (world.closed?.push(e.id), { value: undefined }))
   on('tool.list', () => ({
     value: [
       { name: 'Bash', description: '', mcp: false },
@@ -190,4 +191,45 @@ test('長條圖與 SVG 填滿比例', () => {
   })
   expect(svg.startsWith('<svg')).toBe(true)
   expect(svg).toContain('>50%<')
+})
+
+test('/hud off 關閉面板，autoOpen 關掉時不自動打開', { options: { autoOpen: false } }, async ($, on) => {
+  const opened: string[] = []
+  const closed: string[] = []
+  engine(on, { usd: 0, twd: null, opened, closed })
+
+  await start($)
+  expect(opened).toEqual([])
+
+  const off = await $.command.run({ command: 'hud', args: 'off', origin: composer, presentation })
+  expect(closed).toEqual(['token-hud'])
+  expect(off.text).toContain('已關閉')
+
+  await $.command.run({ command: 'hud', args: '', origin: composer, presentation })
+  expect(opened).toEqual(['token-hud'])
+})
+
+test('/hud 在對話裡畫出 SVG HUD（桌面、手機），/hud off 不畫', { options: { liveRate: false, twdRate: 32 } }, async ($, on) => {
+  const world: World = { usd: 0, contextPercent: 8, fiveHourUsed: 16, twd: null }
+  engine(on, world)
+  on('ui.render', { component: 'CommandOutput' }, () => ({ type: 'Text', children: ['engine row'] }) as never)
+
+  await start($)
+  await $.prompt.submit({ text: 'hi', wait: false, origin: composer })
+  world.usd = 0.4244
+  await $.turn.complete({ answer: 'ok', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer', usage: usage(100, 50, 379500, 0) })
+
+  const row = (args: string) => ({ command: 'hud', args, text: 'Token HUD', isErrored: false })
+  for (const surface of ['desktop', 'mobile'] as const) {
+    const ui = await $.ui.mount({ plugin: 'token-meter', surface, component: 'CommandOutput', props: row('') } as never)
+    const drawn = JSON.stringify(await ui.drawn())
+    expect(drawn).toContain('"type":"Svg"')
+    expect(drawn).toContain('>92%<')
+    expect(drawn).toContain('>84%<')
+    await ui.unmount()
+  }
+
+  const off = await $.ui.mount({ plugin: 'token-meter', surface: 'desktop', component: 'CommandOutput', props: row('off') } as never)
+  expect(JSON.stringify(await off.drawn())).toContain('engine row')
+  await off.unmount()
 })

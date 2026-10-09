@@ -26,6 +26,11 @@ export const bar = (value: number, max: number, width = 10): string => {
   return '█'.repeat(filled) + '░'.repeat(width - filled)
 }
 
+/** A percent as a gauge in two parts, so the filled cells can take a colour of their own. */
+export const filled = (p: number | null, width: number): string => '█'.repeat(Math.round((Math.max(0, Math.min(100, p ?? 0)) / 100) * width))
+
+export const empty = (p: number | null, width: number): string => '░'.repeat(width - filled(p, width).length)
+
 export const totalIn = (s: Send): number => s.input + s.cacheRead + s.cacheWrite
 
 export const hitRate = (s: Send): number => {
