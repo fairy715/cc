@@ -40,8 +40,18 @@ Claude Code mod：暗黑破壞神風格的 token HUD。每次送出燒掉多少 
 
 ## 安裝
 
+在終端機的 Claude Code 或桌面版 Code 分頁輸入：
+
 ```
-/plugin install token-meter --marketplace fairy715/cc
+/plugin marketplace add fairy715/cc
+/plugin install token-meter@fairy715-mods
 ```
 
-出現 `Add marketplace?` 時按 `y`，再選安裝範圍（user）。
+安裝範圍選 user，之後每個 session 都會載入。
+
+## 支援的介面
+
+- **桌面版 Code 分頁**：圖片版 HUD（紅藍球、技能列、裝備）
+- **終端機 Claude Code**：文字版 HUD
+- **雲端 session（claude.ai/code、手機遠端）**：hook 會執行但不畫面板，用 `/tokens` 看明細
+- **Cowork**：官方文件未列入 mod 支援範圍
