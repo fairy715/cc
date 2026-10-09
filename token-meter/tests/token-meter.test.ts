@@ -16,14 +16,15 @@ const composer = { kind: 'composer' } as const
 const presentation = { isFullscreen: false, columns: 120 }
 const view = { scroll: { offset: 0, bodyRows: 40 }, view: {} }
 
-type World = { usd: number; contextPercent?: number; fiveHourUsed?: number; twd: number | null }
+type World = { usd: number; contextPercent?: number; fiveHourUsed?: number; twd: number | null; opened?: string[]; closed?: string[] }
 
 const engine = (on: On, world: World) => {
   mock.clock(on, { now: 1000 })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('ui.status', () => ({ value: undefined }))
-  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  on('ui.open', ($, e) => (world.opened?.push(e.id), { value: { isPlaced: true as const } }))
+  on('ui.close', ($, e) => (world.closed?.push(e.id), { value: undefined }))
   on('tool.list', () => ({
     value: [
       { name: 'Bash', description: '', mcp: false },
@@ -190,4 +191,20 @@ test('長條圖與 SVG 填滿比例', () => {
   })
   expect(svg.startsWith('<svg')).toBe(true)
   expect(svg).toContain('>50%<')
+})
+
+test('/hud off 關閉面板，autoOpen 關掉時不自動打開', { options: { autoOpen: false } }, async ($, on) => {
+  const opened: string[] = []
+  const closed: string[] = []
+  engine(on, { usd: 0, twd: null, opened, closed })
+
+  await start($)
+  expect(opened).toEqual([])
+
+  const off = await $.command.run({ command: 'hud', args: 'off', origin: composer, presentation })
+  expect(closed).toEqual(['token-hud'])
+  expect(off.text).toContain('已關閉')
+
+  await $.command.run({ command: 'hud', args: '', origin: composer, presentation })
+  expect(opened).toEqual(['token-hud'])
 })

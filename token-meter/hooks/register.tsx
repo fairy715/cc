@@ -89,6 +89,7 @@ export const register: Register = (on, options) => {
   const budgetTwd = positive(options.budgetTwd, DEFAULT_BUDGET_TWD)
   const isLiveWanted = options.liveRate !== false
   const isReplyLine = options.replyLine !== false
+  const isAutoOpen = options.autoOpen !== false
 
   let baseUsd: number | null = null
   let startedAt = 0
@@ -111,8 +112,10 @@ export const register: Register = (on, options) => {
       .catch(() => undefined)
 
     await $.command.register({ name: 'tokens', description: '列出最近 10 次送出的 token 用量與費用（含台幣）' })
-    await $.command.register({ name: 'hud', description: '打開暗黑破壞神風格的 token HUD 面板' })
-    void $.ui.open({ id: PANE, title: 'Token HUD' }).catch(() => undefined)
+    await $.command.register({ name: 'hud', description: '打開 Token HUD 面板；/hud off 關閉' })
+    if (isAutoOpen) {
+      void $.ui.open({ id: PANE, title: 'Token HUD' }).catch(() => undefined)
+    }
 
     return next(e)
   })
@@ -123,7 +126,13 @@ export const register: Register = (on, options) => {
     return { text: d.history.length === 0 ? '還沒有紀錄：送出一則訊息後再試。' : report(d) }
   })
 
-  on('command.run', { command: 'hud' }, async $ => {
+  on('command.run', { command: 'hud' }, async ($, e) => {
+    if (/^(off|close|關|關閉)$/i.test(e.args.trim())) {
+      await $.ui.close({ id: PANE })
+
+      return { text: 'Token HUD 已關閉。輸入 /hud 可以再打開；不想每次自動打開，到 /config 把 token-meter 的 autoOpen 關掉。' }
+    }
+
     const opened = await $.ui.open({ id: PANE, title: 'Token HUD' })
 
     return { text: opened.isPlaced ? 'Token HUD 已打開。' : 'Token HUD 這個介面放不下面板，改看輸入框上方或每則回覆下方的那一行。' }
