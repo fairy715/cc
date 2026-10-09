@@ -10,8 +10,10 @@ export type Send = {
   subagentTurns: number
 }
 
+export type Rate = { twdPerUsd: number; isLive: boolean }
+
 declare module 'claude-code' {
   interface PluginState {
-    'token-meter': { history: Send[]; sessionUsd: number | null }
+    'token-meter': { history: Send[]; sessionUsd: number | null; rate: Rate | null }
   }
 }
