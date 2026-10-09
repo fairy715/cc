@@ -1,7 +1,7 @@
 {
   "name": "token-meter",
-  "version": "0.2.0",
-  "description": "每次送出後顯示該回合的 token 用量與費用（美元＋台幣），並提供 /tokens 查看歷史",
+  "version": "0.4.0",
+  "description": "暗黑破壞神風格 HUD：每次送出燒掉多少 token 與費用（美元＋台幣）、上下文與額度剩餘、技能列與裝備；/hud 開面板、/tokens 看明細",
   "types": "./types/index.d.ts",
   "userConfig": {
     "twdRate": {
@@ -14,6 +14,18 @@
       "type": "boolean",
       "title": "即時匯率",
       "description": "每次 session 開始時從 open.er-api.com 抓 USD/TWD 匯率",
+      "default": true
+    },
+    "budgetTwd": {
+      "type": "number",
+      "title": "預算（台幣）",
+      "description": "經驗條與沒有額度資料時的藍球：本 session 預算多少台幣",
+      "default": 300
+    },
+    "replyLine": {
+      "type": "boolean",
+      "title": "回覆下方顯示一行",
+      "description": "每次回覆完自動在下方顯示本次 token、費用與剩餘量",
       "default": true
     }
   }

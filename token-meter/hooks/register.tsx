@@ -1,14 +1,22 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, ModelUsage, Register } from 'claude-code'
 
-import type { Rate, Send } from '../types'
+import type { Gear, Rate, Send, Skill, Vitals } from '../types'
+import { bar, compact, hudAlt, hudSvg, mana, money, ntd, pct, replyLine, report, skillName, topSkills, totalIn } from './hud'
+import type { HudData } from './hud'
 
 const history = atom({ plugin: 'token-meter', key: 'history' } as const, [])
 const sessionUsd = atom({ plugin: 'token-meter', key: 'sessionUsd' } as const, null)
 const rate = atom({ plugin: 'token-meter', key: 'rate' } as const, null)
+const skills = atom({ plugin: 'token-meter', key: 'skills' } as const, [])
+const gear = atom({ plugin: 'token-meter', key: 'gear' } as const, { model: '', mcp: [] })
+const vitals = atom({ plugin: 'token-meter', key: 'vitals' } as const, { contextLeft: null, quotaLeft: null, quotaLabel: '額度' })
 
+const PANE = 'token-hud'
 const RATE_URL = 'https://open.er-api.com/v6/latest/USD'
 const DEFAULT_TWD_RATE = 31.9
+const DEFAULT_BUDGET_TWD = 300
+const QUOTA_LABELS: Record<string, string> = { five_hour: '5 小時額度', seven_day: '7 天額度', spend_limit: '花費上限' }
 
 const zero = (): ModelUsage => ({
   input_tokens: 0,
@@ -24,19 +32,6 @@ const add = (a: ModelUsage, b: ModelUsage): ModelUsage => ({
   cache_creation_input_tokens: a.cache_creation_input_tokens + b.cache_creation_input_tokens,
 })
 
-export const num = (n: number): string => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
-
-export const money = (n: number | null, r: Rate): string =>
-  n === null ? 'US$—' : `US$${n.toFixed(4)}（NT$${(n * r.twdPerUsd).toFixed(2)}）`
-
-export const totalIn = (s: Send): number => s.input + s.cacheRead + s.cacheWrite
-
-export const line = (s: Send, r: Rate): string =>
-  `輸入 ${num(totalIn(s))}（快取讀 ${num(s.cacheRead)}／寫 ${num(s.cacheWrite)}）· 輸出 ${num(s.output)} · ${money(s.usd, r)}`
-
-export const rateNote = (r: Rate): string =>
-  `匯率 1 USD = ${r.twdPerUsd.toFixed(2)} TWD（${r.isLive ? '即時' : '設定值'}）`
-
 const costNow = async ($: EngineInterface): Promise<number | null> => (await $.session.usage()).cost?.usd ?? null
 
 const liveTwd = async ($: EngineInterface): Promise<number | null> => {
@@ -51,19 +46,55 @@ const liveTwd = async ($: EngineInterface): Promise<number | null> => {
   return typeof twd === 'number' && twd > 0 ? twd : null
 }
 
+// The orbs: what is left of the context window and of the tightest rate-limit window.
+const measure = async ($: EngineInterface): Promise<Vitals> => {
+  const { context, rateLimits } = await $.session.usage()
+  const tightest = [...rateLimits].sort((a, b) => b.percentUsed - a.percentUsed)[0]
+
+  return {
+    contextLeft: context.percent === undefined ? null : Math.max(0, 100 - context.percent),
+    quotaLeft: tightest === undefined ? null : Math.max(0, 100 - tightest.percentUsed),
+    quotaLabel: tightest === undefined ? '額度' : (QUOTA_LABELS[tightest.kind] ?? tightest.kind),
+  }
+}
+
+const mcpServers = async ($: EngineInterface): Promise<string[]> => {
+  const names = (await $.tool.list()).filter(t => t.mcp).map(t => /^mcp__(.+?)__/.exec(t.name)?.[1])
+
+  return [...new Set(names.filter((n): n is string => n !== undefined).map(n => n.replace(/_/g, ' ')))]
+}
+
 // Until a live rate arrives (or with it switched off) the configured one stands.
 const rateOf = async ($: EngineInterface, fallback: number): Promise<Rate> =>
   (await read($, rate)) ?? { twdPerUsd: fallback, isLive: false }
 
+const gather = async ($: EngineInterface, fallback: number, budgetTwd: number): Promise<HudData> => ({
+  history: await read($, history),
+  total: await read($, sessionUsd),
+  rate: await rateOf($, fallback),
+  skills: await read($, skills),
+  gear: await read($, gear),
+  vitals: await read($, vitals),
+  budgetTwd,
+})
+
+const positive = (value: unknown, fallback: number): number => {
+  const n = Number(value)
+
+  return Number.isFinite(n) && n > 0 ? n : fallback
+}
+
 export const register: Register = (on, options) => {
-  const configured = Number(options.twdRate)
-  const fixedRate = Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_TWD_RATE
+  const fixedRate = positive(options.twdRate, DEFAULT_TWD_RATE)
+  const budgetTwd = positive(options.budgetTwd, DEFAULT_BUDGET_TWD)
   const isLiveWanted = options.liveRate !== false
+  const isReplyLine = options.replyLine !== false
 
   let baseUsd: number | null = null
   let startedAt = 0
   let acc = zero()
   let subagentTurns = 0
+  let used: string[] = []
 
   on('session.start', async ($, e, next) => {
     if (isLiveWanted) {
@@ -72,26 +103,30 @@ export const register: Register = (on, options) => {
         .catch(() => undefined)
     }
 
-    await $.command.register({
-      name: 'tokens',
-      description: '列出最近 10 次送出的 token 用量與費用（含台幣）',
-    })
+    void mcpServers($)
+      .then(mcp => update($, gear, g => ({ ...g, mcp })))
+      .catch(() => undefined)
+    void measure($)
+      .then(v => update($, vitals, () => v))
+      .catch(() => undefined)
+
+    await $.command.register({ name: 'tokens', description: '列出最近 10 次送出的 token 用量與費用（含台幣）' })
+    await $.command.register({ name: 'hud', description: '打開暗黑破壞神風格的 token HUD 面板' })
+    void $.ui.open({ id: PANE, title: 'Token HUD' }).catch(() => undefined)
 
     return next(e)
   })
 
   on('command.run', { command: 'tokens' }, async $ => {
-    const list = await read($, history)
-    const total = await read($, sessionUsd)
-    const r = await rateOf($, fixedRate)
+    const d = await gather($, fixedRate, budgetTwd)
 
-    if (list.length === 0) {
-      return { text: '還沒有紀錄：送出一則訊息後再試。' }
-    }
+    return { text: d.history.length === 0 ? '還沒有紀錄：送出一則訊息後再試。' : report(d) }
+  })
 
-    const rows = list.slice(-10).map((s, i) => `${i + 1}. ${line(s, r)} · ${s.seconds}s · ${s.model}`)
+  on('command.run', { command: 'hud' }, async $ => {
+    const opened = await $.ui.open({ id: PANE, title: 'Token HUD' })
 
-    return { text: [...rows, `本 session 累計：${money(total, r)}`, rateNote(r)].join('\n') }
+    return { text: opened.isPlaced ? 'Token HUD 已打開。' : 'Token HUD 這個介面放不下面板，改看輸入框上方或每則回覆下方的那一行。' }
   })
 
   on('prompt.submit', async ($, e, next) => {
@@ -99,6 +134,7 @@ export const register: Register = (on, options) => {
     if (e.turnId === undefined) {
       acc = zero()
       subagentTurns = 0
+      used = []
       await Promise.all([costNow($), $.clock.now()])
         .then(([usd, now]) => {
           baseUsd = usd
@@ -109,6 +145,12 @@ export const register: Register = (on, options) => {
           startedAt = 0
         })
     }
+
+    return next(e)
+  })
+
+  on('tool.call', ($, e, next) => {
+    used.push(skillName(e.tool, e.tool === 'Skill' ? e.skill : undefined))
 
     return next(e)
   })
@@ -138,36 +180,113 @@ export const register: Register = (on, options) => {
       subagentTurns,
     }
 
-    await update($, history, list => [...list, send].slice(-200))
+    const list = await update($, history, l => [...l, send].slice(-200))
+    const sendNo = list.length
+    const tally = used
+    await update($, skills, all => {
+      const slots: Skill[] = all.map(s => ({ ...s }))
+      for (const name of tally) {
+        const found = slots.find(s => s.name === name)
+        if (found) {
+          found.count += 1
+          found.lastSend = sendNo
+        } else {
+          slots.push({ name, count: 1, lastSend: sendNo })
+        }
+      }
+      return slots
+    })
     await update($, sessionUsd, () => now)
-    const r = await rateOf($, fixedRate)
-    $.ui.status(`本次 ${money(send.usd, r)} ｜ 累計 ${money(now, r)}`)
+    if (send.model !== '') {
+      await update($, gear, (g: Gear) => ({ ...g, model: send.model }))
+    }
+    await measure($)
+      .then(v => update($, vitals, () => v))
+      .catch(() => undefined)
+
+    const d = await gather($, fixedRate, budgetTwd)
+    $.ui.status(`本次 ${money(send.usd, d.rate)} ｜ 累計 ${money(now, d.rate)}`)
 
     baseUsd = now
     acc = zero()
     subagentTurns = 0
+    used = []
 
-    return done
+    if (!isReplyLine || e.reason !== 'answer') {
+      return done
+    }
+
+    return { ...done, text: replyLine(d) }
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const list = await read($, history)
-    const last = list[list.length - 1]
+    const d = await gather($, fixedRate, budgetTwd)
+    const last = d.history[d.history.length - 1]
 
     if (e.props.hasSurvey || last === undefined) {
       return next(e)
     }
 
-    const total = await read($, sessionUsd)
-    const r = await rateOf($, fixedRate)
     const { Box, Text } = $.ui.resolve(e)
+    const blue = mana(d)
+    const hot = topSkills(d.skills.filter(s => s.lastSend === d.history.length), 4)
+
+    return (
+      <Box flexDirection="row">
+        <Text color="error" bold>● {pct(d.vitals.contextLeft)}</Text>
+        <Text dimColor> 上下文 {bar(d.vitals.contextLeft ?? 0, 100, 6)}  </Text>
+        <Text color="warning">🔥 {compact(totalIn(last))}</Text>
+        <Text dimColor> token · </Text>
+        <Text color="success" bold>{ntd(last.usd, d.rate)}</Text>
+        <Text dimColor>{hot.length > 0 ? `  ⚔ ${hot.map(s => `${s.name}×${s.count}`).join(' ')}` : ''}  ｜ 累計 </Text>
+        <Text color="warning" bold>{ntd(d.total, d.rate)}</Text>
+        <Text dimColor>  {blue.label} {bar(blue.left ?? 0, 100, 6)} </Text>
+        <Text color="suggestion" bold>{pct(blue.left)} ●</Text>
+      </Box>
+    )
+  })
+
+  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    const d = await gather($, fixedRate, budgetTwd)
+
+    if (e.surface === 'terminal') {
+      const { Box, Text } = $.ui.resolve(e)
+      const blue = mana(d)
+
+      return (
+        <Box flexDirection="column">
+          <Text>
+            <Text color="error" bold>● 上下文 {pct(d.vitals.contextLeft)} </Text>
+            <Text color="error">{bar(d.vitals.contextLeft ?? 0, 100)}</Text>
+            <Text>   </Text>
+            <Text color="suggestion">{bar(blue.left ?? 0, 100)}</Text>
+            <Text color="suggestion" bold> {blue.label} {pct(blue.left)} ●</Text>
+          </Text>
+          {d.history.slice(-3).map((s, i, all) => (
+            <Text dimColor>
+              第 {d.history.length - all.length + i + 1} 次燒掉 {compact(totalIn(s))} token，產出 {compact(s.output)}，花費 {ntd(s.usd, d.rate)}
+            </Text>
+          ))}
+          <Text>
+            {topSkills(d.skills).map((s, i) => `[${i + 1} ${s.name}×${s.count}]`).join(' ') || '技能列：還沒用過工具'}
+          </Text>
+          <Text dimColor>
+            ⚔ {d.gear.model || '—'}   🛡 MCP×{d.gear.mcp.length} {d.gear.mcp.join('、')}
+          </Text>
+          <Text>
+            <Text color="warning">{bar(d.total === null ? 0 : d.total * d.rate.twdPerUsd, budgetTwd, 30)}</Text>
+            <Text dimColor> 累計 {ntd(d.total, d.rate)} / 預算 NT${budgetTwd}</Text>
+          </Text>
+        </Box>
+      )
+    }
+
+    const { Box, Svg } = $.ui.resolve(e)
+    const width = Math.min(760, Math.max(320, (e.viewport?.columns ?? 95) * 8))
 
     return (
       <Box>
-        <Text dimColor>
-          上次送出：{line(last, r)}
-          {last.subagentTurns > 0 ? `（含子代理 ${last.subagentTurns} 回合）` : ''} ｜ 累計 {money(total, r)}
-        </Text>
+        <Svg source={hudSvg(d)} alt={hudAlt(d)} width={width} />
       </Box>
     )
   })
