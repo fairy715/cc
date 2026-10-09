@@ -1,0 +1,6 @@
+{
+  "name": "token-meter",
+  "version": "0.1.0",
+  "description": "每次送出後顯示該回合的 token 用量與費用，並提供 /tokens 查看歷史",
+  "types": "./types/index.d.ts"
+}
