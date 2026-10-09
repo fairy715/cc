@@ -1,0 +1,20 @@
+{
+  "name": "token-meter",
+  "version": "0.2.0",
+  "description": "每次送出後顯示該回合的 token 用量與費用（美元＋台幣），並提供 /tokens 查看歷史",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "twdRate": {
+      "type": "number",
+      "title": "台幣匯率（備用）",
+      "description": "1 USD 兌多少 TWD；關閉即時匯率或抓取失敗時使用",
+      "default": 31.9
+    },
+    "liveRate": {
+      "type": "boolean",
+      "title": "即時匯率",
+      "description": "每次 session 開始時從 open.er-api.com 抓 USD/TWD 匯率",
+      "default": true
+    }
+  }
+}

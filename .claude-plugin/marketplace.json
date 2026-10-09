@@ -1,0 +1,5 @@
+{
+  "name": "fairy715-mods",
+  "owner": { "name": "fairy715" },
+  "plugins": [{ "name": "token-meter", "source": "./token-meter" }]
+}
