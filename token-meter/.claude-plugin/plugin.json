@@ -1,6 +1,6 @@
 {
   "name": "token-meter",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "description": "暗黑破壞神風格 HUD：每次送出燒掉多少 token 與費用（美元＋台幣）、上下文與額度剩餘、技能列與裝備；/hud 開面板、/tokens 看明細",
   "types": "./types/index.d.ts",
   "userConfig": {
