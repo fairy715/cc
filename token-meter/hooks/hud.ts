@@ -148,8 +148,16 @@ const esc = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;'
 
 const cut = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n - 1)}…` : s)
 
-const orb = (id: string, cx: number, cy: number, level: number | null, label: string, colors: [string, string, string]): string => {
-  const r = 46
+const orb = (
+  id: string,
+  cx: number,
+  cy: number,
+  level: number | null,
+  label: string,
+  colors: [string, string, string],
+  r = 46,
+): string => {
+  const isSmall = r < 40
   const fill = Math.max(0, Math.min(1, (level ?? 0) / 100))
   const top = cy + r - 2 * r * fill
 
@@ -163,9 +171,13 @@ const orb = (id: string, cx: number, cy: number, level: number | null, label: st
   <circle cx="${cx}" cy="${cy}" r="${r + 7}" fill="#1a1410" stroke="#8a6d3b" stroke-width="3"/>
   <circle cx="${cx}" cy="${cy}" r="${r}" fill="#0b0b0f"/>
   <circle cx="${cx}" cy="${cy}" r="${r}" fill="url(#${id}g)" clip-path="url(#${id}c)"/>
-  <ellipse cx="${cx - 14}" cy="${cy - 22}" rx="18" ry="9" fill="#fff" opacity=".18"/>
-  <text x="${cx}" y="${cy + 6}" text-anchor="middle" font-size="20" font-weight="700" fill="#fff" stroke="#000" stroke-width=".6">${pct(level)}</text>
-  <text x="${cx}" y="${cy + r + 22}" text-anchor="middle" font-size="11" fill="#d8c9a3">${esc(label)}</text>`
+  <ellipse cx="${cx - r * 0.3}" cy="${cy - r * 0.48}" rx="${r * 0.4}" ry="${r * 0.2}" fill="#fff" opacity=".18"/>
+  <text x="${cx}" y="${cy + (isSmall ? 2 : 6)}" text-anchor="middle" font-size="${isSmall ? 17 : 20}" font-weight="700" fill="#fff" stroke="#000" stroke-width=".6">${pct(level)}</text>
+  ${
+    isSmall
+      ? `<text x="${cx}" y="${cy + 17}" text-anchor="middle" font-size="9" fill="#fff" opacity=".85">${esc(label)}</text>`
+      : `<text x="${cx}" y="${cy + r + 22}" text-anchor="middle" font-size="11" fill="#d8c9a3">${esc(label)}</text>`
+  }`
 }
 
 /** The HUD as one SVG: red orb, log, skill bar, gear, experience bar, blue orb. */
@@ -232,6 +244,61 @@ export const hudSvg = (d: HudData): string => {
   <rect x="${slotsX}" y="162" width="${xpW}" height="9" rx="4" fill="#0b0b0f" stroke="#5a4a32"/>
   <rect x="${slotsX}" y="162" width="${(xpW * xp).toFixed(1)}" height="9" rx="4" fill="url(#xp)"/>
   <text x="${slotsX + xpW / 2}" y="184" text-anchor="middle" font-size="10" fill="#bfae86">累計 ${esc(ntd(d.total, d.rate))} / 預算 NT$${num(d.budgetTwd)}</text>
+</svg>`
+}
+
+/** The HUD slimmed to the band above the prompt: orbs, this send, the skill bar, spend. */
+export const hudBandSvg = (d: HudData): string => {
+  const W = 760
+  const H = 96
+  const last = d.history[d.history.length - 1]
+  const blue = mana(d)
+  const slots = topSkills(d.skills)
+  const spent = d.total === null ? 0 : d.total * d.rate.twdPerUsd
+  const xp = d.budgetTwd > 0 ? Math.min(1, spent / d.budgetTwd) : 0
+  const midX = 96
+  const midW = W - 2 * midX
+  const slotW = 34
+
+  const burn =
+    last === undefined
+      ? '<tspan fill="#a99f8a">送出一則訊息後開始計算</tspan>'
+      : `🔥 本次 <tspan fill="#ff8a5c" font-weight="700">${compact(totalIn(last))}</tspan> token · 產出 <tspan fill="#9fd4ff">${compact(last.output)}</tspan> · <tspan fill="#ffd166" font-weight="700">${esc(ntd(last.usd, d.rate))}</tspan> · 快取 <tspan fill="#9fd4ff">${Math.round(hitRate(last) * 100)}%</tspan>`
+
+  const slotSvg = Array.from({ length: 6 }, (_, i) => {
+    const s = slots[i]
+    const x = midX + i * (slotW + 5)
+    const isHot = s !== undefined && s.lastSend === d.history.length
+    const glyph = s === undefined ? '' : icon(s.name) || ([...s.name][0] ?? '')
+
+    return `
+  <rect x="${x}" y="28" width="${slotW}" height="${slotW}" rx="4" fill="#15171c" stroke="${isHot ? '#ffcc66' : '#4a3d2a'}" stroke-width="${isHot ? 2 : 1.2}"/>
+  <text x="${x + slotW / 2}" y="51" text-anchor="middle" font-size="15" fill="#e8e0cc">${esc(glyph)}</text>
+  ${s === undefined ? '' : `<text x="${x + slotW - 3}" y="38" text-anchor="end" font-size="9" font-weight="700" fill="#fff">${s.count}</text>`}`
+  }).join('')
+
+  const names = slots
+    .slice(0, 4)
+    .map(s => `${s.name.replace(/^[^\w\s]+/u, '')}×${s.count}`)
+    .join('  ')
+  const gearX = midX + 6 * (slotW + 5) + 8
+  const gear = `⚔ ${cut(d.gear.model || '—', 18)}  🛡 MCP×${d.gear.mcp.length}`
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" font-family="system-ui, -apple-system, 'Noto Sans TC', sans-serif">
+  <defs>
+    <linearGradient id="bstone" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2b2620"/><stop offset="1" stop-color="#14110d"/></linearGradient>
+    <linearGradient id="bxp" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#b8860b"/><stop offset="1" stop-color="#ffd166"/></linearGradient>
+  </defs>
+  <rect x="0" y="0" width="${W}" height="${H}" rx="10" fill="url(#bstone)" stroke="#5a4a32" stroke-width="2"/>
+  ${orb('bred', 48, 48, d.vitals.contextLeft, '上下文', ['#ff7b5c', '#c0170f', '#4a0000'], 32)}
+  ${orb('bblue', W - 48, 48, blue.left, blue.label.replace(' ', ''), ['#8fa6ff', '#2236c9', '#08083a'], 32)}
+  <text x="${midX}" y="19" font-size="13" fill="#d8d0bc">${burn}</text>
+  ${slotSvg}
+  <text x="${gearX}" y="41" font-size="11" fill="#c8bfa6">${esc(cut(names, 46))}</text>
+  <text x="${gearX}" y="58" font-size="10" fill="#a99f8a">${esc(gear)}</text>
+  <rect x="${midX}" y="72" width="${midW}" height="7" rx="3.5" fill="#0b0b0f" stroke="#5a4a32"/>
+  <rect x="${midX}" y="72" width="${(midW * xp).toFixed(1)}" height="7" rx="3.5" fill="url(#bxp)"/>
+  <text x="${W / 2}" y="91" text-anchor="middle" font-size="10" fill="#bfae86">累計 ${esc(ntd(d.total, d.rate))} / 預算 NT$${num(d.budgetTwd)}</text>
 </svg>`
 }
 

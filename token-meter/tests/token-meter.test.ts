@@ -127,7 +127,7 @@ test('關掉 replyLine 時回覆不變', { options: { liveRate: false, replyLine
   expect(done.text).toBe('ok')
 })
 
-test('輸入框上方一行在各介面都畫得出', { options: { liveRate: false, twdRate: 32 } }, async ($, on) => {
+test('輸入框上方：桌面版畫精簡 SVG HUD，其他畫文字', { options: { liveRate: false, twdRate: 32 } }, async ($, on) => {
   const world: World = { usd: 0, contextPercent: 38, twd: null }
   engine(on, world)
 
@@ -143,7 +143,12 @@ test('輸入框上方一行在各介面都畫得出', { options: { liveRate: fal
     })
     const drawn = JSON.stringify(await ui.drawn())
     expect(drawn).toContain('NT$8.00')
-    expect(drawn).toContain('"62%"')
+    if (surface === 'desktop') {
+      expect(drawn).toContain('"type":"Svg"')
+      expect(drawn).toContain('>62%<')
+    } else {
+      expect(drawn).toContain('"62%"')
+    }
     await ui.unmount()
   }
 })

@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, ModelUsage, Register, ResolveInput } from 'claude-code'
 
 import type { Gear, Rate, Send, Skill, Vitals } from '../types'
-import { bar, compact, empty, filled, hudAlt, hudSvg, mana, money, ntd, pct, replyLine, report, skillName, topSkills, totalIn } from './hud'
+import { bar, compact, empty, filled, hudAlt, hudBandSvg, hudSvg, mana, money, ntd, pct, replyLine, report, skillName, topSkills, totalIn } from './hud'
 import type { HudData } from './hud'
 
 const history = atom({ plugin: 'token-meter', key: 'history' } as const, [])
@@ -159,8 +159,12 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  on('tool.call', ($, e, next) => {
+  on('tool.call', async ($, e, next) => {
     used.push(skillName(e.tool, e.tool === 'Skill' ? e.skill : undefined))
+    const server = /^mcp__(.+?)__/.exec(e.tool)?.[1]?.replace(/_/g, ' ')
+    if (server !== undefined) {
+      await update($, gear, g => (g.mcp.includes(server) ? g : { ...g, mcp: [...g.mcp, server] })).catch(() => undefined)
+    }
 
     return next(e)
   })
@@ -235,6 +239,17 @@ export const register: Register = (on, options) => {
 
     if (e.props.hasSurvey || last === undefined) {
       return next(e)
+    }
+
+    if (e.surface === 'desktop') {
+      const { Box, Svg } = $.ui.resolve(e)
+      const width = Math.min(760, Math.max(360, e.props.bodyColumns * 8))
+
+      return (
+        <Box>
+          <Svg source={hudBandSvg(d)} alt={hudAlt(d)} width={width} />
+        </Box>
+      )
     }
 
     const { Box, Text } = $.ui.resolve(e)
