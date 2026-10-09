@@ -1,8 +1,8 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, ModelUsage, Register } from 'claude-code'
+import type { EngineInterface, ModelUsage, Register, ResolveInput } from 'claude-code'
 
 import type { Gear, Rate, Send, Skill, Vitals } from '../types'
-import { bar, compact, hudAlt, hudSvg, mana, money, ntd, pct, replyLine, report, skillName, topSkills, totalIn } from './hud'
+import { bar, compact, empty, filled, hudAlt, hudSvg, mana, money, ntd, pct, replyLine, report, skillName, topSkills, totalIn } from './hud'
 import type { HudData } from './hud'
 
 const history = atom({ plugin: 'token-meter', key: 'history' } as const, [])
@@ -133,9 +133,10 @@ export const register: Register = (on, options) => {
       return { text: 'Token HUD 已關閉。輸入 /hud 可以再打開；不想每次自動打開，到 /config 把 token-meter 的 autoOpen 關掉。' }
     }
 
-    const opened = await $.ui.open({ id: PANE, title: 'Token HUD' })
+    void $.ui.open({ id: PANE, title: 'Token HUD' }).catch(() => undefined)
+    const d = await gather($, fixedRate, budgetTwd)
 
-    return { text: opened.isPlaced ? 'Token HUD 已打開。' : 'Token HUD 這個介面放不下面板，改看輸入框上方或每則回覆下方的那一行。' }
+    return { text: `Token HUD：${hudAlt(d)}` }
   })
 
   on('prompt.submit', async ($, e, next) => {
@@ -243,60 +244,77 @@ export const register: Register = (on, options) => {
     return (
       <Box flexDirection="row">
         <Text color="error" bold>● {pct(d.vitals.contextLeft)}</Text>
-        <Text dimColor> 上下文 {bar(d.vitals.contextLeft ?? 0, 100, 6)}  </Text>
+        <Text dimColor> 上下文 </Text>
+        <Text color="error">{filled(d.vitals.contextLeft, 8)}</Text>
+        <Text dimColor>{empty(d.vitals.contextLeft, 8)}  </Text>
         <Text color="warning">🔥 {compact(totalIn(last))}</Text>
         <Text dimColor> token · </Text>
         <Text color="success" bold>{ntd(last.usd, d.rate)}</Text>
         <Text dimColor>{hot.length > 0 ? `  ⚔ ${hot.map(s => `${s.name}×${s.count}`).join(' ')}` : ''}  ｜ 累計 </Text>
         <Text color="warning" bold>{ntd(d.total, d.rate)}</Text>
-        <Text dimColor>  {blue.label} {bar(blue.left ?? 0, 100, 6)} </Text>
+        <Text dimColor>  {blue.label} </Text>
+        <Text color="suggestion">{filled(blue.left, 8)}</Text>
+        <Text dimColor>{empty(blue.left, 8)} </Text>
         <Text color="suggestion" bold>{pct(blue.left)} ●</Text>
       </Box>
     )
   })
 
+  on('ui.render', { component: 'CommandOutput', props: { command: 'hud' } }, async ($, e, next) => {
+    if (e.props.isErrored || /^(off|close|關|關閉)$/i.test(e.props.args.trim())) {
+      return next(e)
+    }
+
+    return drawHud($, e, await gather($, fixedRate, budgetTwd), budgetTwd)
+  })
+
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const d = await gather($, fixedRate, budgetTwd)
 
-    if (e.surface === 'terminal') {
-      const { Box, Text } = $.ui.resolve(e)
-      const blue = mana(d)
+    return drawHud($, e, d, budgetTwd)
+  })
+}
 
-      return (
-        <Box flexDirection="column">
-          <Text>
-            <Text color="error" bold>● 上下文 {pct(d.vitals.contextLeft)} </Text>
-            <Text color="error">{bar(d.vitals.contextLeft ?? 0, 100)}</Text>
-            <Text>   </Text>
-            <Text color="suggestion">{bar(blue.left ?? 0, 100)}</Text>
-            <Text color="suggestion" bold> {blue.label} {pct(blue.left)} ●</Text>
-          </Text>
-          {d.history.slice(-3).map((s, i, all) => (
-            <Text dimColor>
-              第 {d.history.length - all.length + i + 1} 次燒掉 {compact(totalIn(s))} token，產出 {compact(s.output)}，花費 {ntd(s.usd, d.rate)}
-            </Text>
-          ))}
-          <Text>
-            {topSkills(d.skills).map((s, i) => `[${i + 1} ${s.name}×${s.count}]`).join(' ') || '技能列：還沒用過工具'}
-          </Text>
-          <Text dimColor>
-            ⚔ {d.gear.model || '—'}   🛡 MCP×{d.gear.mcp.length} {d.gear.mcp.join('、')}
-          </Text>
-          <Text>
-            <Text color="warning">{bar(d.total === null ? 0 : d.total * d.rate.twdPerUsd, budgetTwd, 30)}</Text>
-            <Text dimColor> 累計 {ntd(d.total, d.rate)} / 預算 NT${budgetTwd}</Text>
-          </Text>
-        </Box>
-      )
-    }
-
-    const { Box, Svg } = $.ui.resolve(e)
-    const width = Math.min(760, Math.max(320, (e.viewport?.columns ?? 95) * 8))
+// The HUD for a surface: an SVG where the surface draws one, text in the terminal.
+const drawHud = ($: EngineInterface, e: ResolveInput & { viewport?: { columns: number } }, d: HudData, budgetTwd: number) => {
+  if (e.surface === 'terminal') {
+    const { Box, Text } = $.ui.resolve(e)
+    const blue = mana(d)
 
     return (
-      <Box>
-        <Svg source={hudSvg(d)} alt={hudAlt(d)} width={width} />
+      <Box flexDirection="column">
+        <Text>
+          <Text color="error" bold>● 上下文 {pct(d.vitals.contextLeft)} </Text>
+          <Text color="error">{bar(d.vitals.contextLeft ?? 0, 100)}</Text>
+          <Text>   </Text>
+          <Text color="suggestion">{bar(blue.left ?? 0, 100)}</Text>
+          <Text color="suggestion" bold> {blue.label} {pct(blue.left)} ●</Text>
+        </Text>
+        {d.history.slice(-3).map((s, i, all) => (
+          <Text dimColor>
+            第 {d.history.length - all.length + i + 1} 次燒掉 {compact(totalIn(s))} token，產出 {compact(s.output)}，花費 {ntd(s.usd, d.rate)}
+          </Text>
+        ))}
+        <Text>
+          {topSkills(d.skills).map((s, i) => `[${i + 1} ${s.name}×${s.count}]`).join(' ') || '技能列：還沒用過工具'}
+        </Text>
+        <Text dimColor>
+          ⚔ {d.gear.model || '—'}   🛡 MCP×{d.gear.mcp.length} {d.gear.mcp.join('、')}
+        </Text>
+        <Text>
+          <Text color="warning">{bar(d.total === null ? 0 : d.total * d.rate.twdPerUsd, budgetTwd, 30)}</Text>
+          <Text dimColor> 累計 {ntd(d.total, d.rate)} / 預算 NT${budgetTwd}</Text>
+        </Text>
       </Box>
     )
-  })
+  }
+
+  const { Box, Svg } = $.ui.resolve(e)
+  const width = Math.min(760, Math.max(320, (e.viewport?.columns ?? 95) * 8))
+
+  return (
+    <Box>
+      <Svg source={hudSvg(d)} alt={hudAlt(d)} width={width} />
+    </Box>
+  )
 }

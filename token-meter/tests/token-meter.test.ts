@@ -208,3 +208,28 @@ test('/hud off 關閉面板，autoOpen 關掉時不自動打開', { options: { a
   await $.command.run({ command: 'hud', args: '', origin: composer, presentation })
   expect(opened).toEqual(['token-hud'])
 })
+
+test('/hud 在對話裡畫出 SVG HUD（桌面、手機），/hud off 不畫', { options: { liveRate: false, twdRate: 32 } }, async ($, on) => {
+  const world: World = { usd: 0, contextPercent: 8, fiveHourUsed: 16, twd: null }
+  engine(on, world)
+  on('ui.render', { component: 'CommandOutput' }, () => ({ type: 'Text', children: ['engine row'] }) as never)
+
+  await start($)
+  await $.prompt.submit({ text: 'hi', wait: false, origin: composer })
+  world.usd = 0.4244
+  await $.turn.complete({ answer: 'ok', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer', usage: usage(100, 50, 379500, 0) })
+
+  const row = (args: string) => ({ command: 'hud', args, text: 'Token HUD', isErrored: false })
+  for (const surface of ['desktop', 'mobile'] as const) {
+    const ui = await $.ui.mount({ plugin: 'token-meter', surface, component: 'CommandOutput', props: row('') } as never)
+    const drawn = JSON.stringify(await ui.drawn())
+    expect(drawn).toContain('"type":"Svg"')
+    expect(drawn).toContain('>92%<')
+    expect(drawn).toContain('>84%<')
+    await ui.unmount()
+  }
+
+  const off = await $.ui.mount({ plugin: 'token-meter', surface: 'desktop', component: 'CommandOutput', props: row('off') } as never)
+  expect(JSON.stringify(await off.drawn())).toContain('engine row')
+  await off.unmount()
+})
