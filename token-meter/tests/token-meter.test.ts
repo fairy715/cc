@@ -2,7 +2,7 @@ import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
 
-import { bar, hudSvg, skillName } from '../hooks/hud'
+import { bar, hudSvg, lastNo, replyLine, report, skillName } from '../hooks/hud'
 
 const usage = (input: number, output: number, read: number, write: number, model = 'claude-test') => ({
   input_tokens: input,
@@ -237,4 +237,44 @@ test('/hud 在對話裡畫出 SVG HUD（桌面、手機），/hud off 不畫', {
   const off = await $.ui.mount({ plugin: 'token-meter', surface: 'desktop', component: 'CommandOutput', props: row('off') } as never)
   expect(JSON.stringify(await off.drawn())).toContain('engine row')
   await off.unmount()
+})
+
+test('回覆下方的技能次數只算這一次，不是整個 session 累計', { options: { liveRate: false } }, async ($, on) => {
+  engine(on, { usd: 0, twd: null })
+  await start($)
+
+  await $.prompt.submit({ text: 'one', wait: false, origin: composer })
+  for (const id of ['a', 'b', 'c']) await $.tool.call({ tool: 'Bash', tool_use_id: id, command: 'ls' } as never)
+  await $.turn.complete({ answer: 'ok', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer', usage: usage(1, 1, 0, 0) })
+
+  await $.prompt.submit({ text: 'two', wait: false, origin: composer })
+  await $.tool.call({ tool: 'Bash', tool_use_id: 'd', command: 'ls' } as never)
+  await $.tool.call({ tool: 'Read', tool_use_id: 'e', file_path: '/x' } as never)
+  await $.tool.call({ tool: 'Read', tool_use_id: 'f', file_path: '/y' } as never)
+  const done = await $.turn.complete({ answer: 'ok', durationMs: 1, isAborted: false, turnId: 't2', reason: 'answer', usage: usage(1, 1, 0, 0) })
+
+  expect(done.text).toContain('⚔ 👁Read×2 ⚡Bash×1')
+  expect(done.text).not.toContain('Bash×4')
+})
+
+test('超過 200 筆後，序號繼續往上數，金框只亮最新一次用過的技能', () => {
+  const send = (no: number) => ({
+    at: 0, model: 'm', input: 1, cacheRead: 0, cacheWrite: 0, output: 1, usd: 0.01, seconds: 1, subagentTurns: 0, no,
+  })
+  const history = Array.from({ length: 200 }, (_, i) => send(102 + i))
+  const d = {
+    history, total: 2, rate: { twdPerUsd: 32, isLive: false },
+    skills: [
+      { name: 'Bash', count: 50, lastSend: 301, lastCount: 2 },
+      { name: 'Read', count: 80, lastSend: 250, lastCount: 5 },
+    ],
+    gear: { model: 'm', mcp: [] }, vitals: { contextLeft: 50, quotaLeft: null, quotaLabel: '額度' }, budgetTwd: 300,
+  }
+
+  expect(lastNo(history)).toBe(301)
+  expect(report(d)).toContain('| 301 |')
+  expect(report(d)).toContain('共 200 次送出')
+  expect(replyLine(d)).toContain('⚔ ⚡Bash×2')
+  expect(replyLine(d)).not.toContain('Read')
+  expect(hudSvg(d)).toContain('第 301 次燒掉')
 })

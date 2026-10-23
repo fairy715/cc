@@ -8,12 +8,22 @@ export type Send = {
   usd: number | null
   seconds: number
   subagentTurns: number
+  /** Which send of the session this was, counted on past the 200 the history keeps; absent on records from before 0.5.1. */
+  no?: number
 }
 
 export type Rate = { twdPerUsd: number; isLive: boolean }
 
 /** A tool or skill the session has used, as a slot on the skill bar. */
-export type Skill = { name: string; count: number; lastSend: number }
+export type Skill = {
+  name: string
+  /** Uses over the session. */
+  count: number
+  /** The `no` of the last send that used it. */
+  lastSend: number
+  /** Uses in that send alone; absent on records from before 0.5.1. */
+  lastCount?: number
+}
 
 /** What the session is equipped with: the model and the MCP servers. */
 export type Gear = { model: string; mcp: string[] }

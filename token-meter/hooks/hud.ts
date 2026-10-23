@@ -31,6 +31,25 @@ export const filled = (p: number | null, width: number): string => '█'.repeat(
 
 export const empty = (p: number | null, width: number): string => '░'.repeat(width - filled(p, width).length)
 
+/** A send's number in the session: its own `no`, or its place for a record older than `no`. */
+export const sendNo = (s: Send, index: number): number => s.no ?? index + 1
+
+/** The number of the latest send, 0 before the first. */
+export const lastNo = (history: readonly Send[]): number => {
+  const i = history.length - 1
+  const last = history[i]
+
+  return last === undefined ? 0 : sendNo(last, i)
+}
+
+/** The skills the latest send used, each with what it used them that send. */
+export const usedLast = (d: HudData, n = 6): Skill[] =>
+  topSkills(d.skills.filter(s => s.lastSend === lastNo(d.history)), Infinity)
+    .sort((a, b) => (b.lastCount ?? b.count) - (a.lastCount ?? a.count))
+    .slice(0, n)
+
+export const lastUse = (s: Skill): string => `${s.name}×${s.lastCount ?? s.count}`
+
 export const totalIn = (s: Send): number => s.input + s.cacheRead + s.cacheWrite
 
 export const hitRate = (s: Send): number => {
@@ -96,8 +115,8 @@ export const mana = (d: HudData): { left: number | null; label: string } => {
 export const replyLine = (d: HudData): string => {
   const last = d.history[d.history.length - 1]
   const blue = mana(d)
-  const skills = topSkills(d.skills.filter(s => s.lastSend === d.history.length), 4)
-    .map(s => `${icon(s.name)}${s.name}×${s.count}`)
+  const skills = usedLast(d, 4)
+    .map(s => `${icon(s.name)}${lastUse(s)}`)
     .join(' ')
   const burned = last === undefined ? '' : `🔥 本次 ${compact(totalIn(last))} token · ${ntd(last.usd, d.rate)}`
 
@@ -124,17 +143,18 @@ export const report = (d: HudData): string => {
   const average = priced.length > 0 ? sum / priced.length : null
   const model = recent[recent.length - 1]?.model
   const top = priced.reduce<Send | null>((a, s) => (a === null || (s.usd ?? 0) > (a.usd ?? 0) ? s : a), null)
+  const topNo = top === null ? 0 : sendNo(top, list.indexOf(top))
 
   const rows = recent.map((s, i) => {
     const sub = s.subagentTurns > 0 ? ` +${s.subagentTurns}子` : ''
 
-    return `| ${first + i + 1} | ${compact(totalIn(s))} | ${Math.round(hitRate(s) * 100)}% | ${compact(s.output)} | \`${bar(s.usd ?? 0, maxUsd)}\` | **${s.usd === null ? '—' : `$${s.usd.toFixed(4)}`}** | ${ntd(s.usd, r)} | ${s.seconds}s${sub} |`
+    return `| ${sendNo(s, first + i)} | ${compact(totalIn(s))} | ${Math.round(hitRate(s) * 100)}% | ${compact(s.output)} | \`${bar(s.usd ?? 0, maxUsd)}\` | **${s.usd === null ? '—' : `$${s.usd.toFixed(4)}`}** | ${ntd(s.usd, r)} | ${s.seconds}s${sub} |`
   })
 
   return [
     `### 💰 本 session 累計 **${d.total === null ? 'US$—' : `US$${d.total.toFixed(4)}`}** · **${ntd(d.total, r)}**`,
     '',
-    `共 ${list.length} 次送出 · 平均每次 ${average === null ? '—' : `US$${average.toFixed(4)}（${ntd(average, r)}）`}${top === null ? '' : ` · 最貴第 ${list.indexOf(top) + 1} 次 ${ntd(top.usd, r)}`}`,
+    `共 ${list.length} 次送出 · 平均每次 ${average === null ? '—' : `US$${average.toFixed(4)}（${ntd(average, r)}）`}${top === null ? '' : ` · 最貴第 ${topNo} 次 ${ntd(top.usd, r)}`}`,
     '',
     '| # | 輸入 | 快取命中 | 輸出 | 費用 | USD | 台幣 | 耗時 |',
     '|--:|--:|--:|--:|:--|--:|--:|--:|',
@@ -193,7 +213,7 @@ export const hudSvg = (d: HudData): string => {
   const log = d.history
     .slice(-3)
     .map((s, i, all) => {
-      const n = d.history.length - all.length + i + 1
+      const n = sendNo(s, d.history.length - all.length + i)
       return `<text x="128" y="${24 + i * 16}" font-size="12" fill="#c8c8c8">第 ${n} 次燒掉 <tspan fill="#ff8a5c">${compact(totalIn(s))}</tspan> token，產出 <tspan fill="#9fd4ff">${compact(s.output)}</tspan>，花費 <tspan fill="#ffd166">${esc(ntd(s.usd, d.rate))}</tspan></text>`
     })
     .join('')
@@ -204,7 +224,7 @@ export const hudSvg = (d: HudData): string => {
   const slotSvg = Array.from({ length: 6 }, (_, i) => {
     const s = slots[i]
     const x = slotsX + i * (slotW + 6)
-    const isHot = s !== undefined && s.lastSend === d.history.length
+    const isHot = s !== undefined && s.lastSend === lastNo(d.history)
     const glyph = s === undefined ? '' : icon(s.name) || ([...s.name][0] ?? '')
     const name = s === undefined ? '' : cut(s.name.replace(/^[^\w\s]+/u, ''), 7)
 
@@ -268,7 +288,7 @@ export const hudBandSvg = (d: HudData): string => {
   const slotSvg = Array.from({ length: 6 }, (_, i) => {
     const s = slots[i]
     const x = midX + i * (slotW + 5)
-    const isHot = s !== undefined && s.lastSend === d.history.length
+    const isHot = s !== undefined && s.lastSend === lastNo(d.history)
     const glyph = s === undefined ? '' : icon(s.name) || ([...s.name][0] ?? '')
 
     return `
