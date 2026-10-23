@@ -2,7 +2,28 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, ModelUsage, Register, ResolveInput } from 'claude-code'
 
 import type { Gear, Rate, Send, Skill, Vitals } from '../types'
-import { bar, compact, empty, filled, hudAlt, hudBandSvg, hudSvg, mana, money, ntd, pct, replyLine, report, skillName, topSkills, totalIn } from './hud'
+import {
+  bar,
+  compact,
+  empty,
+  filled,
+  hudAlt,
+  hudBandSvg,
+  hudSvg,
+  lastNo,
+  lastUse,
+  mana,
+  money,
+  ntd,
+  pct,
+  replyLine,
+  report,
+  sendNo,
+  skillName,
+  topSkills,
+  totalIn,
+  usedLast,
+} from './hud'
 import type { HudData } from './hud'
 
 const history = atom({ plugin: 'token-meter', key: 'history' } as const, [])
@@ -194,18 +215,23 @@ export const register: Register = (on, options) => {
       subagentTurns,
     }
 
-    const list = await update($, history, l => [...l, send].slice(-200))
-    const sendNo = list.length
-    const tally = used
+    // Numbered on from the last send kept, so the count runs past the 200 the history keeps.
+    const list = await update($, history, l => [...l, { ...send, no: lastNo(l) + 1 }].slice(-200))
+    const thisNo = lastNo(list)
+    const tally = new Map<string, number>()
+    for (const name of used) {
+      tally.set(name, (tally.get(name) ?? 0) + 1)
+    }
     await update($, skills, all => {
       const slots: Skill[] = all.map(s => ({ ...s }))
-      for (const name of tally) {
+      for (const [name, times] of tally) {
         const found = slots.find(s => s.name === name)
         if (found) {
-          found.count += 1
-          found.lastSend = sendNo
+          found.count += times
+          found.lastSend = thisNo
+          found.lastCount = times
         } else {
-          slots.push({ name, count: 1, lastSend: sendNo })
+          slots.push({ name, count: times, lastSend: thisNo, lastCount: times })
         }
       }
       return slots
@@ -254,7 +280,7 @@ export const register: Register = (on, options) => {
 
     const { Box, Text } = $.ui.resolve(e)
     const blue = mana(d)
-    const hot = topSkills(d.skills.filter(s => s.lastSend === d.history.length), 4)
+    const hot = usedLast(d, 4)
 
     return (
       <Box flexDirection="row">
@@ -265,7 +291,7 @@ export const register: Register = (on, options) => {
         <Text color="warning">🔥 {compact(totalIn(last))}</Text>
         <Text dimColor> token · </Text>
         <Text color="success" bold>{ntd(last.usd, d.rate)}</Text>
-        <Text dimColor>{hot.length > 0 ? `  ⚔ ${hot.map(s => `${s.name}×${s.count}`).join(' ')}` : ''}  ｜ 累計 </Text>
+        <Text dimColor>{hot.length > 0 ? `  ⚔ ${hot.map(lastUse).join(' ')}` : ''}  ｜ 累計 </Text>
         <Text color="warning" bold>{ntd(d.total, d.rate)}</Text>
         <Text dimColor>  {blue.label} </Text>
         <Text color="suggestion">{filled(blue.left, 8)}</Text>
@@ -307,7 +333,7 @@ const drawHud = ($: EngineInterface, e: ResolveInput & { viewport?: { columns: n
         </Text>
         {d.history.slice(-3).map((s, i, all) => (
           <Text dimColor>
-            第 {d.history.length - all.length + i + 1} 次燒掉 {compact(totalIn(s))} token，產出 {compact(s.output)}，花費 {ntd(s.usd, d.rate)}
+            第 {sendNo(s, d.history.length - all.length + i)} 次燒掉 {compact(totalIn(s))} token，產出 {compact(s.output)}，花費 {ntd(s.usd, d.rate)}
           </Text>
         ))}
         <Text>
