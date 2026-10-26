@@ -1,4 +1,5 @@
-import type { Gear, Rate, Send, Skill, Vitals } from '../types'
+import type { Gear, MercName, Mercs, Rate, Send, Skill, Vitals } from '../types'
+import { MERC_LABEL, MERCS, STATUS_WORD } from './mercs'
 
 export type HudData = {
   history: readonly Send[]
@@ -8,6 +9,7 @@ export type HudData = {
   gear: Gear
   vitals: Vitals
   budgetTwd: number
+  mercs: Mercs
 }
 
 export const num = (n: number): string => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
@@ -49,6 +51,36 @@ export const usedLast = (d: HudData, n = 6): Skill[] =>
     .slice(0, n)
 
 export const lastUse = (s: Skill): string => `${s.name}×${s.lastCount ?? s.count}`
+
+/** What the latest send dispatched: `🤝 Gemini×1 Codex×1（Codex 額度不足）`, or '' when nothing. */
+export const hiredLine = (d: HudData): string => {
+  const last = d.history[d.history.length - 1]
+  const hired = MERCS.filter(m => (last?.mercs?.[m] ?? 0) > 0)
+  if (hired.length === 0) {
+    return ''
+  }
+
+  const troubled = hired
+    .filter(m => d.mercs[m].status === 'quota' || d.mercs[m].status === 'fail')
+    .map(m => `${MERC_LABEL[m]} ${STATUS_WORD[d.mercs[m].status ?? 'fail']}`)
+
+  return `🤝 ${hired.map(m => `${MERC_LABEL[m]}×${last?.mercs?.[m]}`).join(' ')}${troubled.length > 0 ? `（${troubled.join('、')}）` : ''}`
+}
+
+/** The mercenaries in a few characters: `G×3 C×2`, or '' before any call. */
+export const mercsShort = (mercs: Mercs): string =>
+  MERCS.filter(m => mercs[m].calls > 0)
+    .map(m => `${MERC_LABEL[m][0]}×${mercs[m].calls}${mercs[m].status === 'quota' ? '💤' : ''}`)
+    .join(' ')
+
+/** One mercenary in words: `Gemini 3 次 · 12.4K token · 正常`. */
+export const mercLine = (m: MercName, mercs: Mercs): string => {
+  const one = mercs[m]
+  const tokens = one.tokens === null ? '' : ` · ${compact(one.tokens)} token`
+  const status = one.status === null ? '' : ` · ${STATUS_WORD[one.status]}`
+
+  return `${MERC_LABEL[m]} ${one.calls} 次${tokens}${status}`
+}
 
 export const totalIn = (s: Send): number => s.input + s.cacheRead + s.cacheWrite
 
@@ -126,6 +158,7 @@ export const replyLine = (d: HudData): string => {
     `🔵 ${blue.label}剩 ${pct(blue.left)}`,
     `💰 累計 ${ntd(d.total, d.rate)}`,
     skills === '' ? '' : `⚔ ${skills}`,
+    hiredLine(d),
   ]
     .filter(Boolean)
     .join(' · ')
@@ -148,7 +181,9 @@ export const report = (d: HudData): string => {
   const rows = recent.map((s, i) => {
     const sub = s.subagentTurns > 0 ? ` +${s.subagentTurns}子` : ''
 
-    return `| ${sendNo(s, first + i)} | ${compact(totalIn(s))} | ${Math.round(hitRate(s) * 100)}% | ${compact(s.output)} | \`${bar(s.usd ?? 0, maxUsd)}\` | **${s.usd === null ? '—' : `$${s.usd.toFixed(4)}`}** | ${ntd(s.usd, r)} | ${s.seconds}s${sub} |`
+    const hired = MERCS.filter(m => (s.mercs?.[m] ?? 0) > 0).map(m => `${MERC_LABEL[m][0]}${s.mercs?.[m]}`).join(' ') || '—'
+
+    return `| ${sendNo(s, first + i)} | ${compact(totalIn(s))} | ${Math.round(hitRate(s) * 100)}% | ${compact(s.output)} | \`${bar(s.usd ?? 0, maxUsd)}\` | **${s.usd === null ? '—' : `$${s.usd.toFixed(4)}`}** | ${ntd(s.usd, r)} | ${s.seconds}s${sub} | ${hired} |`
   })
 
   return [
@@ -156,8 +191,8 @@ export const report = (d: HudData): string => {
     '',
     `共 ${list.length} 次送出 · 平均每次 ${average === null ? '—' : `US$${average.toFixed(4)}（${ntd(average, r)}）`}${top === null ? '' : ` · 最貴第 ${topNo} 次 ${ntd(top.usd, r)}`}`,
     '',
-    '| # | 輸入 | 快取命中 | 輸出 | 費用 | USD | 台幣 | 耗時 |',
-    '|--:|--:|--:|--:|:--|--:|--:|--:|',
+    '| # | 輸入 | 快取命中 | 輸出 | 費用 | USD | 台幣 | 耗時 | 外援 |',
+    '|--:|--:|--:|--:|:--|--:|--:|--:|:--|',
     ...rows,
     '',
     `_${rateNote(r)}${model ? ` · 模型 ${model}` : ''}_`,
@@ -200,10 +235,31 @@ const orb = (
   }`
 }
 
+const MERC_COLOR: Record<MercName, string> = { gemini: '#34a853', codex: '#f5a623' }
+
+/** The mercenaries' portraits and tallies, side by side; greyed while out of quota. */
+const mercRow = (mercs: Mercs, x: number, y: number): string => {
+  if (MERCS.every(m => mercs[m].calls === 0 && mercs[m].tokens === null)) {
+    return `<text x="${x}" y="${y}" font-size="11" fill="#7d7464">🤝 傭兵：本 session 尚未派工</text>`
+  }
+
+  return MERCS.map((m, i) => {
+    const one = mercs[m]
+    const isResting = one.status === 'quota'
+    const cx = x + 7 + i * 240
+    const color = isResting ? '#5b5b5b' : MERC_COLOR[m]
+
+    return `
+  <circle cx="${cx}" cy="${y - 4}" r="7" fill="${color}" stroke="#8a6d3b" stroke-width="1.5"/>
+  <text x="${cx}" y="${y - 1}" text-anchor="middle" font-size="8" font-weight="700" fill="#fff">${MERC_LABEL[m][0]}</text>
+  <text x="${cx + 12}" y="${y}" font-size="11" fill="${isResting ? '#8a8a8a' : '#d8c9a3'}">${esc(mercLine(m, mercs))}${isResting ? ' 💤 休息中' : ''}</text>`
+  }).join('')
+}
+
 /** The HUD as one SVG: red orb, log, skill bar, gear, experience bar, blue orb. */
 export const hudSvg = (d: HudData): string => {
   const W = 760
-  const H = 190
+  const H = 214
   const last = d.history[d.history.length - 1]
   const blue = mana(d)
   const slots = topSkills(d.skills)
@@ -255,15 +311,16 @@ export const hudSvg = (d: HudData): string => {
     <linearGradient id="xp" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#b8860b"/><stop offset="1" stop-color="#ffd166"/></linearGradient>
   </defs>
   <rect x="0" y="0" width="${W}" height="${H}" rx="10" fill="url(#stone)" stroke="#5a4a32" stroke-width="2"/>
-  ${orb('red', 64, 86, d.vitals.contextLeft, '上下文剩餘', ['#ff7b5c', '#c0170f', '#4a0000'])}
-  ${orb('blue', W - 64, 86, blue.left, `${blue.label}剩餘`, ['#8fa6ff', '#2236c9', '#08083a'])}
+  ${orb('red', 64, 96, d.vitals.contextLeft, '上下文剩餘', ['#ff7b5c', '#c0170f', '#4a0000'])}
+  ${orb('blue', W - 64, 96, blue.left, `${blue.label}剩餘`, ['#8fa6ff', '#2236c9', '#08083a'])}
   ${log}
   ${slotSvg}
   ${potions}
   <text x="${slotsX}" y="152" font-size="11" fill="#d8c9a3">${esc(gear)}</text>
-  <rect x="${slotsX}" y="162" width="${xpW}" height="9" rx="4" fill="#0b0b0f" stroke="#5a4a32"/>
-  <rect x="${slotsX}" y="162" width="${(xpW * xp).toFixed(1)}" height="9" rx="4" fill="url(#xp)"/>
-  <text x="${slotsX + xpW / 2}" y="184" text-anchor="middle" font-size="10" fill="#bfae86">累計 ${esc(ntd(d.total, d.rate))} / 預算 NT$${num(d.budgetTwd)}</text>
+  ${mercRow(d.mercs, slotsX, 174)}
+  <rect x="${slotsX}" y="186" width="${xpW}" height="9" rx="4" fill="#0b0b0f" stroke="#5a4a32"/>
+  <rect x="${slotsX}" y="186" width="${(xpW * xp).toFixed(1)}" height="9" rx="4" fill="url(#xp)"/>
+  <text x="${slotsX + xpW / 2}" y="208" text-anchor="middle" font-size="10" fill="#bfae86">累計 ${esc(ntd(d.total, d.rate))} / 預算 NT$${num(d.budgetTwd)}</text>
 </svg>`
 }
 
@@ -302,7 +359,8 @@ export const hudBandSvg = (d: HudData): string => {
     .map(s => `${s.name.replace(/^[^\w\s]+/u, '')}×${s.count}`)
     .join('  ')
   const gearX = midX + 6 * (slotW + 5) + 8
-  const gear = `⚔ ${cut(d.gear.model || '—', 18)}  🛡 MCP×${d.gear.mcp.length}`
+  const hired = mercsShort(d.mercs)
+  const gear = `⚔ ${cut(d.gear.model || '—', 18)}  🛡 MCP×${d.gear.mcp.length}${hired === '' ? '' : `  🤝 ${hired}`}`
 
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" font-family="system-ui, -apple-system, 'Noto Sans TC', sans-serif">
   <defs>

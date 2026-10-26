@@ -4,7 +4,7 @@ fairy715 的 Claude Code mods（外掛）。
 
 | mod | 說明 |
 |---|---|
-| [token-meter](token-meter/) | 暗黑破壞神風格的 token HUD：每次送出燒掉多少 token、花多少錢（美元＋台幣）、上下文與額度還剩多少，自動顯示在輸入框上方與每則回覆下方 |
+| [token-meter](token-meter/) | 暗黑破壞神風格的 token HUD：每次送出燒掉多少 token、花多少錢（美元＋台幣）、上下文與額度還剩多少，外援 AI（Gemini、Codex）用了多少，自動顯示在輸入框上方與每則回覆下方 |
 
 ![token-meter HUD](token-meter/docs/hud-preview.png)
 
