@@ -1,5 +1,7 @@
 # token-meter
 
+[English](README.en.md) ｜ 繁體中文
+
 Claude Code mod：暗黑破壞神風格的 token HUD。每次送出燒掉多少 token、花多少錢（美元＋台幣）、還剩多少，自動顯示，不用另外呼叫。
 
 ![HUD 預覽](docs/hud-preview.png)
@@ -36,7 +38,9 @@ Claude Code mod：暗黑破壞神風格的 token HUD。每次送出燒掉多少 
 
 ## 外援 AI（傭兵）
 
-搭配 ai-dispatch 派工流程（skill）使用：Claude 在 Bash 裡執行 `agy -p …`（Gemini）或 `codex exec …`（Codex）時記一次呼叫，再到 `~/ai-dispatch/runs/` 讀這個 session 開始後建立的 run 資料夾取用量：
+👉 **完整教學（安裝 Gemini／Codex、登入、讓 Claude 派工、看 HUD）：[docs/mercenaries.md](docs/mercenaries.md)**
+
+讓 Claude 把部分工作派給 Gemini、Codex，HUD 用「傭兵」顯示它們的用量。Claude 在 Bash 裡執行 `agy -p …`（Gemini）或 `codex exec …`（Codex）時記一次呼叫，再到 `~/ai-dispatch/runs/` 讀這個 session 開始後建立的 run 資料夾取用量：
 
 - **Gemini**：`gemini/result.json` 的 `status` 與 `usage`（認得 `total_tokens`、`totalTokenCount`、`input_tokens`＋`output_tokens` 等常見寫法，認不出來就只顯示次數）
 - **Codex**：`codex/stderr.log` 最後的 `tokens used`
