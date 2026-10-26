@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, ModelUsage, Register, ResolveInput } from 'claude-code'
 
-import type { Gear, Rate, Send, Skill, Vitals } from '../types'
+import type { Gear, MercName, MercReading, Mercs, Rate, Send, Skill, Vitals } from '../types'
 import {
   bar,
   compact,
@@ -10,6 +10,9 @@ import {
   hudAlt,
   hudBandSvg,
   hudSvg,
+  hiredLine,
+  mercLine,
+  mercsShort,
   lastNo,
   lastUse,
   mana,
@@ -25,6 +28,7 @@ import {
   usedLast,
 } from './hud'
 import type { HudData } from './hud'
+import { MERC_LABEL, MERCS, mercsIn, noMercs, readCodex, readGemini, tally } from './mercs'
 
 const history = atom({ plugin: 'token-meter', key: 'history' } as const, [])
 const sessionUsd = atom({ plugin: 'token-meter', key: 'sessionUsd' } as const, null)
@@ -32,11 +36,14 @@ const rate = atom({ plugin: 'token-meter', key: 'rate' } as const, null)
 const skills = atom({ plugin: 'token-meter', key: 'skills' } as const, [])
 const gear = atom({ plugin: 'token-meter', key: 'gear' } as const, { model: '', mcp: [] })
 const vitals = atom({ plugin: 'token-meter', key: 'vitals' } as const, { contextLeft: null, quotaLeft: null, quotaLabel: '額度' })
+const mercs = atom({ plugin: 'token-meter', key: 'mercs' } as const, noMercs())
+const runs = atom({ plugin: 'token-meter', key: 'runs' } as const, {})
 
 const PANE = 'token-hud'
 const RATE_URL = 'https://open.er-api.com/v6/latest/USD'
 const DEFAULT_TWD_RATE = 31.9
 const DEFAULT_BUDGET_TWD = 300
+const RUNS_DIR = 'ai-dispatch/runs'
 const QUOTA_LABELS: Record<string, string> = { five_hour: '5 小時額度', seven_day: '7 天額度', spend_limit: '花費上限' }
 
 const zero = (): ModelUsage => ({
@@ -96,8 +103,64 @@ const gather = async ($: EngineInterface, fallback: number, budgetTwd: number): 
   skills: await read($, skills),
   gear: await read($, gear),
   vitals: await read($, vitals),
+  mercs: await read($, mercs),
   budgetTwd,
 })
+
+const readText = async ($: EngineInterface, path: string): Promise<string | null> =>
+  (await $.fs.exists(path)) ? String(await $.fs.read(path)) : null
+
+/** What each ai-dispatch run folder made since `since` says of each mercenary. */
+const scanRuns = async ($: EngineInterface, since: number): Promise<Record<string, Partial<Record<MercName, MercReading>>>> => {
+  const home = await $.env.get('HOME')
+  const dir = `${home ?? ''}/${RUNS_DIR}`
+  if (!home || !(await $.fs.exists(dir))) {
+    return {}
+  }
+
+  const folders = (await $.fs.list(dir))
+    .filter(f => f.kind === 'dir' && f.mtimeMs >= since)
+    .sort((a, b) => b.mtimeMs - a.mtimeMs)
+    .slice(0, 30)
+  const found: Record<string, Partial<Record<MercName, MercReading>>> = {}
+  for (const f of folders) {
+    const run = `${dir}/${f.name}`
+    const gemini = readGemini(await readText($, `${run}/gemini/result.json`), await readText($, `${run}/gemini/stderr.log`), f.mtimeMs)
+    const answer = await readText($, `${run}/codex/answer.md`)
+    const codex = readCodex(await readText($, `${run}/codex/stderr.log`), (answer ?? '').trim() !== '', f.mtimeMs)
+    if (gemini || codex) {
+      found[f.name] = { ...(gemini ? { gemini } : {}), ...(codex ? { codex } : {}) }
+    }
+  }
+
+  return found
+}
+
+const localDay = (ms: number): string => {
+  const d = new Date(ms)
+
+  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`
+}
+
+/** Reads the run folders into the mercenaries' tallies; a mercenary newly out of quota is told once a day. */
+const refreshMercs = async ($: EngineInterface, since: number): Promise<void> => {
+  const before = await read($, mercs)
+  const found = await scanRuns($, since)
+  const all = await update($, runs, r => ({ ...r, ...found }))
+  const after = await update($, mercs, m => tally(m, all))
+
+  for (const m of MERCS) {
+    if (after[m].status !== 'quota' || before[m].status === 'quota') {
+      continue
+    }
+    const key = `quota-notified:${m}`
+    const today = localDay(await $.clock.now())
+    if ((await $.store.get(key)) !== today) {
+      await $.store.set(key, today)
+      $.ui.toast(`${MERC_LABEL[m]} 額度不足，今天先讓它休息`)
+    }
+  }
+}
 
 const positive = (value: unknown, fallback: number): number => {
   const n = Number(value)
@@ -117,8 +180,19 @@ export const register: Register = (on, options) => {
   let acc = zero()
   let subagentTurns = 0
   let used: string[] = []
+  let pending: Record<MercName, number> = { gemini: 0, codex: 0 }
+  let sessionSince = 0
 
   on('session.start', async ($, e, next) => {
+    sessionSince = await $.clock.now().catch(() => 0)
+    void $.session
+      .usage()
+      .then(u => {
+        sessionSince = u.startedAt
+        return refreshMercs($, sessionSince)
+      })
+      .catch(() => undefined)
+
     if (isLiveWanted) {
       void liveTwd($)
         .then(twd => (twd === null ? undefined : update($, rate, () => ({ twdPerUsd: twd, isLive: true }))))
@@ -166,6 +240,7 @@ export const register: Register = (on, options) => {
       acc = zero()
       subagentTurns = 0
       used = []
+      pending = { gemini: 0, codex: 0 }
       await Promise.all([costNow($), $.clock.now()])
         .then(([usd, now]) => {
           baseUsd = usd
@@ -187,7 +262,16 @@ export const register: Register = (on, options) => {
       await update($, gear, g => (g.mcp.includes(server) ? g : { ...g, mcp: [...g.mcp, server] })).catch(() => undefined)
     }
 
-    return next(e)
+    const hired = e.tool === 'Bash' ? mercsIn(e.command) : []
+    for (const m of hired) {
+      pending[m] += 1
+    }
+    const ran = await next(e)
+    if (hired.length > 0) {
+      await refreshMercs($, sessionSince).catch(() => undefined)
+    }
+
+    return ran
   })
 
   on('turn.complete', async ($, e, next) => {
@@ -214,6 +298,10 @@ export const register: Register = (on, options) => {
       seconds: startedAt > 0 ? Math.round(((await $.clock.now()) - startedAt) / 1000) : 0,
       subagentTurns,
     }
+    const hiredNow = pending
+    if (MERCS.some(m => hiredNow[m] > 0)) {
+      send.mercs = Object.fromEntries(MERCS.filter(m => hiredNow[m] > 0).map(m => [m, hiredNow[m]]))
+    }
 
     // Numbered on from the last send kept, so the count runs past the 200 the history keeps.
     const list = await update($, history, l => [...l, { ...send, no: lastNo(l) + 1 }].slice(-200))
@@ -236,6 +324,19 @@ export const register: Register = (on, options) => {
       }
       return slots
     })
+    await update($, mercs, (all: Mercs) => {
+      const counted: Mercs = { gemini: { ...all.gemini }, codex: { ...all.codex } }
+      for (const m of MERCS) {
+        if (hiredNow[m] > 0) {
+          counted[m].calls += hiredNow[m]
+          counted[m].lastSend = thisNo
+          counted[m].lastCalls = hiredNow[m]
+        }
+      }
+      return counted
+    })
+    // A dispatch run in the background may have finished since its Bash call returned.
+    await refreshMercs($, sessionSince).catch(() => undefined)
     await update($, sessionUsd, () => now)
     if (send.model !== '') {
       await update($, gear, (g: Gear) => ({ ...g, model: send.model }))
@@ -251,6 +352,7 @@ export const register: Register = (on, options) => {
     acc = zero()
     subagentTurns = 0
     used = []
+    pending = { gemini: 0, codex: 0 }
 
     if (!isReplyLine || e.reason !== 'answer') {
       return done
@@ -291,7 +393,10 @@ export const register: Register = (on, options) => {
         <Text color="warning">🔥 {compact(totalIn(last))}</Text>
         <Text dimColor> token · </Text>
         <Text color="success" bold>{ntd(last.usd, d.rate)}</Text>
-        <Text dimColor>{hot.length > 0 ? `  ⚔ ${hot.map(lastUse).join(' ')}` : ''}  ｜ 累計 </Text>
+        <Text dimColor>
+          {hot.length > 0 ? `  ⚔ ${hot.map(lastUse).join(' ')}` : ''}
+          {mercsShort(d.mercs) === '' ? '' : `  🤝 ${mercsShort(d.mercs)}`}  ｜ 累計{' '}
+        </Text>
         <Text color="warning" bold>{ntd(d.total, d.rate)}</Text>
         <Text dimColor>  {blue.label} </Text>
         <Text color="suggestion">{filled(blue.left, 8)}</Text>
@@ -341,6 +446,9 @@ const drawHud = ($: EngineInterface, e: ResolveInput & { viewport?: { columns: n
         </Text>
         <Text dimColor>
           ⚔ {d.gear.model || '—'}   🛡 MCP×{d.gear.mcp.length} {d.gear.mcp.join('、')}
+        </Text>
+        <Text dimColor>
+          🤝 {MERCS.every(m => d.mercs[m].calls === 0 && d.mercs[m].tokens === null) ? '傭兵：本 session 尚未派工' : MERCS.map(m => mercLine(m, d.mercs)).join('   ')}
         </Text>
         <Text>
           <Text color="warning">{bar(d.total === null ? 0 : d.total * d.rate.twdPerUsd, budgetTwd, 30)}</Text>

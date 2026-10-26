@@ -3,6 +3,7 @@ import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
 
 import { bar, hudSvg, lastNo, replyLine, report, skillName } from '../hooks/hud'
+import { mercsIn, noMercs, readCodex, readGemini, usageTokens } from '../hooks/mercs'
 
 const usage = (input: number, output: number, read: number, write: number, model = 'claude-test') => ({
   input_tokens: input,
@@ -192,7 +193,7 @@ test('長條圖與 SVG 填滿比例', () => {
   expect(bar(0, 0)).toBe('░░░░░░░░░░')
   const svg = hudSvg({
     history: [], total: null, rate: { twdPerUsd: 32, isLive: false }, skills: [],
-    gear: { model: '', mcp: [] }, vitals: { contextLeft: 50, quotaLeft: null, quotaLabel: '額度' }, budgetTwd: 300,
+    gear: { model: '', mcp: [] }, vitals: { contextLeft: 50, quotaLeft: null, quotaLabel: '額度' }, budgetTwd: 300, mercs: noMercs(),
   })
   expect(svg.startsWith('<svg')).toBe(true)
   expect(svg).toContain('>50%<')
@@ -268,7 +269,7 @@ test('超過 200 筆後，序號繼續往上數，金框只亮最新一次用過
       { name: 'Bash', count: 50, lastSend: 301, lastCount: 2 },
       { name: 'Read', count: 80, lastSend: 250, lastCount: 5 },
     ],
-    gear: { model: 'm', mcp: [] }, vitals: { contextLeft: 50, quotaLeft: null, quotaLabel: '額度' }, budgetTwd: 300,
+    gear: { model: 'm', mcp: [] }, vitals: { contextLeft: 50, quotaLeft: null, quotaLabel: '額度' }, budgetTwd: 300, mercs: noMercs(),
   }
 
   expect(lastNo(history)).toBe(301)
@@ -277,4 +278,88 @@ test('超過 200 筆後，序號繼續往上數，金框只亮最新一次用過
   expect(replyLine(d)).toContain('⚔ ⚡Bash×2')
   expect(replyLine(d)).not.toContain('Read')
   expect(hudSvg(d)).toContain('第 301 次燒掉')
+})
+
+const CODEX_STDERR = [
+  'reading prompt from stdin...',
+  '<stdin>',
+  '   88\t  // retry on 429 or quota errors',
+  '</stdin>',
+  'codex',
+  '{"summary":"發現 4 個問題","findings":[]}',
+  'tokens used',
+  '36,176',
+].join('\n')
+
+test('偵測派工指令：agy -p 是 Gemini，codex exec 是 Codex', () => {
+  expect(mercsIn('cd "$RUN/gemini" && agy -p "$(cat prompt.md)" --output-format json > result.json')).toEqual(['gemini'])
+  expect(mercsIn('cd "$RUN/codex" && codex exec --sandbox read-only --skip-git-repo-check -o answer.md "x"')).toEqual(['codex'])
+  expect(mercsIn('(cd a && agy -p "q" > r.json) & (cd b && codex exec "q") ; wait')).toEqual(['gemini', 'codex'])
+  expect(mercsIn('agy models')).toEqual([])
+  expect(mercsIn('echo "agy -p 寫在引號裡的字" | grep codex')).toEqual([])
+  expect(mercsIn('codex login status')).toEqual([])
+})
+
+test('讀 Codex 的 tokens used；輸入裡的 429、quota 字樣不算額度不足', () => {
+  expect(readCodex(CODEX_STDERR, true, 1)).toEqual({ tokens: 36176, status: 'ok', at: 1 })
+  expect(readCodex('ERROR: You have hit your usage limit. Try again later.', false, 2)).toEqual({ tokens: null, status: 'quota', at: 2 })
+  expect(readCodex('error: something broke', false, 3)?.status).toBe('fail')
+  expect(readCodex(null, false, 4)).toBeNull()
+})
+
+test('Gemini 的 usage：認得常見的 token 欄位寫法，認不出來就留空', () => {
+  expect(usageTokens({ totalTokens: 100 })).toBe(100)
+  expect(usageTokens({ input_tokens: 10, output_tokens: 5 })).toBe(15)
+  expect(usageTokens({ promptTokenCount: 4, candidatesTokenCount: 6 })).toBe(10)
+  expect(usageTokens({ models: { a: { total: 7 }, b: { total: 3 } } })).toBe(10)
+  expect(usageTokens({ requests: 'x' })).toBeNull()
+  expect(readGemini(JSON.stringify({ status: 'SUCCESS', usage: { total_tokens: 1234 } }), null, 5)).toEqual({ tokens: 1234, status: 'ok', at: 5 })
+  expect(readGemini(JSON.stringify({ status: 'ERROR' }), 'RESOURCE_EXHAUSTED: quota exceeded', 6)?.status).toBe('quota')
+})
+
+test('派工後：回覆下方、/tokens、HUD 都顯示傭兵；額度不足跳一次通知', { options: { liveRate: false } }, async ($, on) => {
+  const home = '/home/u'
+  const runs = home + '/ai-dispatch/runs'
+  const files = new Map<string, string>([
+    [runs + '/20261026-143110-review/codex/stderr.log', CODEX_STDERR],
+    [runs + '/20261026-143110-review/codex/answer.md', '{"summary":"ok"}'],
+    [runs + '/20261026-150000-research/gemini/result.json', JSON.stringify({ status: 'ERROR' })],
+    [runs + '/20261026-150000-research/gemini/stderr.log', 'quota exceeded (429)'],
+  ])
+  const toasts: string[] = []
+  engine(on, { usd: 0, twd: null })
+  mock.env(on, { HOME: home })
+  mock.store(on)
+  on('ui.toast', ($, e) => (toasts.push(e.text), { value: undefined }))
+  on('fs.exists', ($, e) => ({ value: e.path === runs || files.has(e.path) }))
+  on('fs.read', ($, e) => ({ value: files.get(e.path) ?? '' }))
+  on('fs.list', () => ({
+    value: [
+      { name: '20261026-143110-review', kind: 'dir' as const, size: 0, mtimeMs: 5000, isLink: false },
+      { name: '20261026-150000-research', kind: 'dir' as const, size: 0, mtimeMs: 6000, isLink: false },
+      { name: 'old-run', kind: 'dir' as const, size: 0, mtimeMs: -1, isLink: false },
+    ],
+  }))
+
+  await start($)
+  await $.prompt.submit({ text: '派工', wait: false, origin: composer })
+  await $.tool.call({ tool: 'Bash', tool_use_id: 'c1', command: 'cd "$RUN/codex" && codex exec --sandbox read-only -o answer.md "q"' } as never)
+  await $.tool.call({ tool: 'Bash', tool_use_id: 'g1', command: 'cd "$RUN/gemini" && agy -p "q" --output-format json > result.json' } as never)
+  const done = await $.turn.complete({ answer: 'ok', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer', usage: usage(1, 1, 0, 0) })
+
+  expect(done.text).toContain('🤝 Gemini×1 Codex×1（Gemini 額度不足）')
+  expect(toasts).toEqual(['Gemini 額度不足，今天先讓它休息'])
+
+  const out = await $.command.run({ command: 'tokens', args: '', origin: composer, presentation })
+  expect(out.text).toContain('| G1 C1 |')
+
+  const ui = await $.ui.mount({ plugin: 'token-meter', surface: 'desktop', component: 'CommandOutput', props: { command: 'hud', args: '', text: '', isErrored: false } } as never)
+  const drawn = JSON.stringify(await ui.drawn())
+  expect(drawn).toContain('Codex 1 次 · 36.2K token · 正常')
+  expect(drawn).toContain('Gemini 1 次 · 額度不足 💤 休息中')
+  await ui.unmount()
+
+  await $.prompt.submit({ text: '再一次', wait: false, origin: composer })
+  await $.turn.complete({ answer: 'ok', durationMs: 1, isAborted: false, turnId: 't2', reason: 'answer', usage: usage(1, 1, 0, 0) })
+  expect(toasts).toHaveLength(1)
 })
