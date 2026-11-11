@@ -136,6 +136,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
   #sheetbar { display: block; width: 100%; padding: 8px; color: var(--ink-2); font-size: 13px; }
   #detail { right: var(--gr); left: var(--gl); top: 112px; width: auto; max-height: 40%; }
   #cam { top: 190px; transform: none; }
+  #detail:not([hidden]) ~ #cam { display: none; }
   #cam button { width: 36px; height: 36px; }
 }
 </style>
