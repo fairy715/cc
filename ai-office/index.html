@@ -1,0 +1,708 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AI Agent 虛擬辦公室</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap">
+<style>
+/* 版面：全螢幕 3D 場景當底，介面是浮在上面的面板（上方工具列、左側清單、右側詳情） */
+:root {
+  --bg: #dfe9ef;
+  --panel: rgba(250, 252, 253, .92);
+  --panel-solid: #fafcfd;
+  --line: #cfdae1;
+  --ink: #15242f;
+  --ink-2: #51636f;
+  --accent: #0e6f8a;
+  --accent-ink: #ffffff;
+  --accent-soft: #d8ecf2;
+  --chip: #e6eef2;
+  --shadow: 0 6px 24px rgba(20, 45, 60, .16);
+  --s-build: #23946a; --s-plan: #3279c0; --s-review: #7658c4;
+  --s-wait: #d37a12; --s-stuck: #cf3f3f; --s-queue: #9a8440; --s-idle: #7d8a93;
+  --font: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif;
+  --gl: max(16px, env(safe-area-inset-left, 0px));
+  --gr: max(16px, env(safe-area-inset-right, 0px));
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d1820; --panel: rgba(20, 32, 41, .92); --panel-solid: #142029; --line: #2b3d49;
+    --ink: #e8f0f4; --ink-2: #9db0bc; --accent: #4fb6d1; --accent-ink: #06222b; --accent-soft: #173845;
+    --chip: #1f303b; --shadow: 0 6px 24px rgba(0, 0, 0, .45);
+    --s-build: #4cc493; --s-plan: #6aa9e6; --s-review: #a48cf0;
+    --s-wait: #f0a23c; --s-stuck: #f06a6a; --s-queue: #c9b064; --s-idle: #93a1ab;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0d1820; --panel: rgba(20, 32, 41, .92); --panel-solid: #142029; --line: #2b3d49;
+  --ink: #e8f0f4; --ink-2: #9db0bc; --accent: #4fb6d1; --accent-ink: #06222b; --accent-soft: #173845;
+  --chip: #1f303b; --shadow: 0 6px 24px rgba(0, 0, 0, .45);
+  --s-build: #4cc493; --s-plan: #6aa9e6; --s-review: #a48cf0;
+  --s-wait: #f0a23c; --s-stuck: #f06a6a; --s-queue: #c9b064; --s-idle: #93a1ab;
+  color-scheme: dark;
+}
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font); font-size: 14px; overflow: hidden; }
+button { font: inherit; color: inherit; cursor: pointer; border: 0; background: none; padding: 0; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+#app { position: relative; height: 100%; overflow: hidden; }
+#scene { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+#labels { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); backdrop-filter: blur(8px); }
+
+/* 上方工具列 */
+#top { position: absolute; top: 12px; left: var(--gl); right: var(--gr); display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-start; pointer-events: none; }
+#top > * { pointer-events: auto; }
+#brand { display: flex; align-items: center; gap: 10px; padding: 9px 14px; width: 340px; box-sizing: border-box; }
+#brand h1 { margin: 0; font-size: 18px; font-weight: 700; letter-spacing: .02em; white-space: nowrap; }
+#src { font-size: 12px; padding: 2px 8px; border-radius: 6px; background: var(--chip); color: var(--ink-2); white-space: nowrap; }
+#count { margin-left: auto; color: var(--ink-2); font-size: 13px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+#tools { margin-left: auto; display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+.seg { display: flex; padding: 4px; gap: 2px; }
+.seg button, .tool { padding: 6px 12px; border-radius: 10px; color: var(--ink-2); white-space: nowrap; }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); font-weight: 700; }
+.tool { padding: 10px 14px; border-radius: 14px; color: var(--ink); }
+
+/* 左側清單 */
+#side { position: absolute; left: var(--gl); top: 68px; bottom: 16px; width: 340px; display: flex; flex-direction: column; overflow: hidden; }
+#sheetbar { display: none; }
+#tabs { display: flex; gap: 4px; padding: 8px; }
+#tabs button { flex: 1; padding: 8px; border-radius: 10px; color: var(--ink-2); font-weight: 500; }
+#tabs button[aria-selected="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 700; }
+#q { margin: 0 10px 8px; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel-solid); color: var(--ink); font: inherit; }
+#q::placeholder { color: var(--ink-2); }
+#chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 10px 8px; }
+#chips button { padding: 4px 10px; border-radius: 8px; background: var(--chip); color: var(--ink-2); font-size: 13px; font-variant-numeric: tabular-nums; }
+#chips button b { color: var(--ink); margin-left: 4px; }
+#chips button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+#chips button[aria-pressed="true"] b { color: inherit; }
+#list { flex: 1; min-height: 0; overflow-y: auto; margin: 0; padding: 0 6px 8px; list-style: none; }
+#list li button { display: grid; grid-template-columns: auto 1fr auto; gap: 2px 10px; align-items: center; width: 100%; text-align: left; padding: 9px 8px; border-radius: 10px; }
+#list li button:hover { background: var(--chip); }
+#list li button[aria-current="true"] { background: var(--accent-soft); }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--c); grid-row: 1 / 3; }
+.ava { width: 34px; height: 34px; border-radius: 10px; background: var(--c); color: #fff; display: grid; place-items: center; font-weight: 700; grid-row: 1 / 3; }
+.nm { font-weight: 700; font-size: 15px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nm small { font-weight: 400; color: var(--ink-2); font-size: 12px; margin-left: 6px; }
+.sub { grid-column: 2; color: var(--ink-2); font-size: 12.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pill { grid-row: 1 / 3; grid-column: 3; font-size: 12px; font-weight: 700; padding: 3px 8px; border-radius: 7px; color: var(--c); background: color-mix(in srgb, var(--c) 16%, transparent); white-space: nowrap; }
+.empty { padding: 24px 12px; color: var(--ink-2); text-align: center; }
+
+/* 右側詳情 */
+#detail { position: absolute; right: calc(var(--gr) + 58px); top: 68px; width: 330px; max-width: calc(100% - var(--gl) - var(--gr)); max-height: calc(100% - 90px); overflow-y: auto; padding: 16px 18px; box-sizing: border-box; }
+#detail .kind { color: var(--ink-2); font-size: 12px; }
+#detail h2 { margin: 2px 32px 8px 0; font-size: 22px; line-height: 1.25; overflow-wrap: anywhere; }
+#detail .x { position: absolute; right: 10px; top: 10px; width: 32px; height: 32px; border-radius: 8px; font-size: 20px; color: var(--ink-2); }
+#detail .x:hover { background: var(--chip); }
+#detail .state { display: inline-block; font-weight: 700; font-size: 13px; padding: 4px 10px; border-radius: 8px; color: #fff; background: var(--c); }
+#detail dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 12px 0; }
+#detail dt { color: var(--ink-2); }
+#detail dd { margin: 0; overflow-wrap: anywhere; }
+.bar { height: 6px; border-radius: 3px; background: var(--chip); overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--c); border-radius: 3px; transition: width .4s; }
+.pct { text-align: right; color: var(--ink-2); font-size: 12px; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.act { margin-top: 10px; padding: 9px 14px; border-radius: 10px; background: var(--accent); color: var(--accent-ink); font-weight: 700; width: 100%; }
+#detail h3 { font-size: 12px; color: var(--ink-2); font-weight: 500; margin: 14px 0 6px; letter-spacing: .06em; }
+.log { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; font-size: 13px; }
+.log time { color: var(--ink-2); font-variant-numeric: tabular-nums; margin-right: 8px; }
+.links { display: flex; flex-wrap: wrap; gap: 6px; }
+.links button { padding: 4px 10px; border-radius: 8px; background: var(--chip); font-size: 13px; }
+
+/* 視角控制 */
+#cam { position: absolute; right: var(--gr); top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; padding: 4px; }
+#cam button { width: 40px; height: 40px; border-radius: 10px; font-size: 20px; color: var(--ink-2); }
+#cam button:hover { background: var(--chip); color: var(--ink); }
+
+/* 場景上的名牌 */
+.lbl { position: absolute; left: 0; top: 0; pointer-events: auto; font-size: 13px; font-weight: 700; padding: 3px 10px; border-radius: 999px; white-space: nowrap; will-change: transform; box-shadow: 0 2px 6px rgba(0, 0, 0, .25); }
+.lbl.room { background: #26323a; color: #fff; border: 2px solid var(--c); display: flex; align-items: center; gap: 6px; }
+.lbl.room i { width: 8px; height: 8px; border-radius: 50%; background: var(--c); }
+.lbl.agent { background: var(--c); color: #fff; font-size: 12px; padding: 2px 9px; }
+.lbl.on { outline: 3px solid #fff; }
+
+@media (max-width: 760px) {
+  #brand { width: auto; flex: 1 1 100%; }
+  #tools { margin-left: 0; justify-content: flex-start; gap: 6px; }
+  .seg button { padding: 5px 9px; }
+  .tool { padding: 9px 11px; }
+  #side { left: 0; right: 0; top: auto; bottom: 0; width: auto; height: 46%; border-radius: 16px 16px 0 0; padding-bottom: env(safe-area-inset-bottom, 0px); padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-area-inset-right, 0px); }
+  #side.closed { height: auto; }
+  #side.closed > :not(#sheetbar) { display: none; }
+  #sheetbar { display: block; width: 100%; padding: 8px; color: var(--ink-2); font-size: 13px; }
+  #detail { right: var(--gr); left: var(--gl); top: 112px; width: auto; max-height: 40%; }
+  #cam { top: 190px; transform: none; }
+  #cam button { width: 36px; height: 36px; }
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <canvas id="scene" aria-label="辦公室 3D 場景，可拖曳旋轉、滾輪縮放"></canvas>
+  <div id="labels"></div>
+
+  <div id="top">
+    <div id="brand" class="card">
+      <h1>AI Agent 辦公室</h1>
+      <span id="src">示範資料</span>
+      <span id="count"></span>
+    </div>
+    <div id="tools">
+      <div class="seg card" role="group" aria-label="場景時間">
+        <button id="t-day" aria-pressed="true">白天</button>
+        <button id="t-night" aria-pressed="false">夜晚</button>
+      </div>
+      <button id="t-pause" class="tool card" aria-pressed="false">暫停動態</button>
+    </div>
+  </div>
+
+  <div id="side" class="card">
+    <button id="sheetbar" aria-expanded="true">收合清單</button>
+    <div id="tabs" role="tablist">
+      <button role="tab" id="tab-p" aria-selected="true">專案</button>
+      <button role="tab" id="tab-a" aria-selected="false">成員</button>
+    </div>
+    <input id="q" type="search" placeholder="搜尋專案名稱" aria-label="搜尋">
+    <div id="chips" role="group" aria-label="狀態篩選"></div>
+    <ul id="list"></ul>
+  </div>
+
+  <div id="detail" class="card" hidden></div>
+
+  <div id="cam" class="card" role="group" aria-label="視角">
+    <button id="c-in" aria-label="放大">＋</button>
+    <button id="c-out" aria-label="縮小">－</button>
+    <button id="c-l" aria-label="向左轉">↺</button>
+    <button id="c-r" aria-label="向右轉">↻</button>
+    <button id="c-home" aria-label="回到全景">⌂</button>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function () {
+'use strict';
+
+/* ───────── 資料 ─────────
+   同資料夾放一份 office-data.json（格式同 DEMO）就會改讀真實資料，否則用示範資料。 */
+var STATUS = {
+  build:  { label: '實作中',   v: '--s-build',  hex: 0x23946a, active: true },
+  plan:   { label: '計畫中',   v: '--s-plan',   hex: 0x3279c0, active: true },
+  review: { label: '審查中',   v: '--s-review', hex: 0x7658c4, active: true },
+  wait:   { label: '等你批准', v: '--s-wait',   hex: 0xe08a1e, active: false },
+  stuck:  { label: '卡住',     v: '--s-stuck',  hex: 0xd64545, active: false },
+  queue:  { label: '排隊',     v: '--s-queue',  hex: 0x9a8440, active: false },
+  idle:   { label: '閒置',     v: '--s-idle',   hex: 0x7d8a93, active: false }
+};
+var DEMO = {
+  agents: [
+    { id: 'lead',   name: '總指揮', role: '派工與調度', color: '#2b3a55', gear: 'cap' },
+    { id: 'fable',  name: 'Fable',  role: '長文與設計', color: '#3f9b54', gear: 'leaf' },
+    { id: 'opus',   name: 'Opus',   role: '架構審查',   color: '#c0446b', gear: 'glasses' },
+    { id: 'sonnet', name: 'Sonnet', role: '實作工程師', color: '#2f74d0', gear: 'antenna' },
+    { id: 'haiku',  name: 'Haiku',  role: '快速雜務',   color: '#d9a21b', gear: 'bow' },
+    { id: 'gemini', name: 'Gemini', role: '研究查證',   color: '#8a5bd6', gear: 'phones' },
+    { id: 'codex',  name: 'Codex',  role: '獨立驗證',   color: '#d9631e', gear: 'visor' }
+  ],
+  projects: [
+    { id: 'token-meter', name: 'token-meter', status: 'build',  task: '外援 AI 用量併入 HUD', members: ['sonnet', 'codex'], progress: 42 },
+    { id: 'chip',        name: '籌碼洞察',     status: 'review', task: '比對今日位階與背離訊號', members: ['gemini', 'opus'], progress: 65 },
+    { id: 'paths',       name: '隔日路徑圖',   status: 'wait',   task: '三條路徑已算好，等你按下批准', members: ['fable'], progress: 100 },
+    { id: 'mail',        name: '郵件管線',     status: 'stuck',  task: '雲端硬碟回 429，重試仍失敗', members: ['sonnet'], progress: 58 },
+    { id: 'monthly',     name: 'IT 月報',      status: 'plan',   task: '拆解本月簡報章節', members: ['lead', 'fable'], progress: 20 },
+    { id: 'plant',       name: '新廠導入',     status: 'build',  task: '甘特資料列對帳', members: ['sonnet', 'haiku'], progress: 73 },
+    { id: 'teams',       name: 'Teams 通知',   status: 'wait',   task: '催辦卡草稿已備妥，等你確認', members: ['haiku'], progress: 100 },
+    { id: 'wms',         name: 'WMS 維護',     status: 'queue',  task: '等候前一件審查結束', members: ['codex'], progress: 0 },
+    { id: 'course',      name: '課程教材',     status: 'plan',   task: '排第一週學習單元', members: ['fable', 'gemini'], progress: 35 },
+    { id: 'redteam',     name: '紅隊審查',     status: 'review', task: '逐條查證反方意見', members: ['opus', 'codex', 'gemini'], progress: 30 },
+    { id: 'glossary',    name: '名詞表',       status: 'idle',   task: '沒有進行中的任務', members: ['haiku'], progress: 0 },
+    { id: 'office',      name: 'AI 辦公室',    status: 'build',  task: '接上真實工作階段資料', members: ['lead', 'sonnet'], progress: 12 }
+  ]
+};
+var NEXT_TASKS = ['整理待辦與驗收條件', '補齊測試案例', '重構舊模組', '更新說明文件', '對帳上週數字', '評估新做法'];
+
+var agents = [], projects = [], byId = {};
+var ui = { tab: 'p', filter: 'all', q: '', sel: null, paused: false, night: false };
+
+function $(id) { return document.getElementById(id); }
+function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+function cssVar(name) { return 'var(' + name + ')'; }
+function now() { return new Date().toTimeString().slice(0, 5); }
+function rnd(a, b) { return a + Math.random() * (b - a); }
+function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+
+function loadData(d) {
+  agents = d.agents.map(function (a) { return Object.assign({}, a); });
+  projects = d.projects.map(function (p) {
+    var q = Object.assign({ progress: 0, members: [], task: '' }, p);
+    if (!STATUS[q.status]) q.status = 'idle';
+    q.log = (p.log || [{ t: now(), m: '開始追蹤：' + q.task }]).slice();
+    return q;
+  });
+  byId = {};
+  agents.forEach(function (a) { byId[a.id] = a; });
+  projects.forEach(function (p) { byId[p.id] = p; });
+}
+
+/* ───────── 3D 場景 ───────── */
+var canvas = $('scene');
+var renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+var scene = new THREE.Scene();
+var camera = new THREE.PerspectiveCamera(32, 1, 1, 600);
+
+var SKY_DAY = new THREE.Color(0xa9d8ee), SKY_NIGHT = new THREE.Color(0x0e1830);
+scene.background = SKY_DAY.clone();
+scene.fog = new THREE.Fog(SKY_DAY.getHex(), 140, 420);
+
+var hemi = new THREE.HemisphereLight(0xffffff, 0x8aa07a, 0.5);
+scene.add(hemi);
+var sun = new THREE.DirectionalLight(0xfff2dd, 0.62);
+sun.position.set(30, 50, 22);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+var sc = sun.shadow.camera; sc.left = -40; sc.right = 40; sc.top = 40; sc.bottom = -40; sc.near = 1; sc.far = 140;
+sun.shadow.bias = -0.0005;
+scene.add(sun);
+var nightLights = [];
+[[0, 5, 0, 1.4, 34], [-15, 4, -15, 0.9, 26], [15, 4, -15, 0.9, 26], [-15, 4, 15, 0.9, 26], [15, 4, 15, 0.9, 26]].forEach(function (c) {
+  var l = new THREE.PointLight(0xffc98a, 0, c[4], 1.6);
+  l.position.set(c[0], c[1], c[2]); l.userData.max = c[3];
+  scene.add(l); nightLights.push(l);
+});
+
+var mats = {};
+function mat(hex, opt) {
+  var k = hex + JSON.stringify(opt || {});
+  if (!mats[k]) mats[k] = new THREE.MeshStandardMaterial(Object.assign({ color: hex, roughness: 0.9, metalness: 0 }, opt || {}));
+  return mats[k];
+}
+function add(parent, geo, material, x, y, z, noCast) {
+  var m = new THREE.Mesh(geo, material);
+  m.position.set(x, y, z); m.castShadow = !noCast; m.receiveShadow = true;
+  parent.add(m); return m;
+}
+var geoCache = {};
+function box(w, h, d) { var k = 'b' + w + ',' + h + ',' + d; return geoCache[k] || (geoCache[k] = new THREE.BoxGeometry(w, h, d)); }
+function cyl(rt, rb, h, s) { var k = 'c' + rt + ',' + rb + ',' + h + ',' + s; return geoCache[k] || (geoCache[k] = new THREE.CylinderGeometry(rt, rb, h, s || 16)); }
+function sph(r, s) { var k = 's' + r + ',' + s; return geoCache[k] || (geoCache[k] = new THREE.SphereGeometry(r, s || 16, s ? Math.max(6, s - 4) : 12)); }
+function ico(r) { var k = 'i' + r; return geoCache[k] || (geoCache[k] = new THREE.IcosahedronGeometry(r, 0)); }
+
+/* 浮島 */
+(function buildIsland() {
+  var half = 24, r = 9, s = new THREE.Shape();
+  s.moveTo(-half + r, -half); s.lineTo(half - r, -half); s.quadraticCurveTo(half, -half, half, -half + r);
+  s.lineTo(half, half - r); s.quadraticCurveTo(half, half, half - r, half);
+  s.lineTo(-half + r, half); s.quadraticCurveTo(-half, half, -half, half - r);
+  s.lineTo(-half, -half + r); s.quadraticCurveTo(-half, -half, -half + r, -half);
+  var g = new THREE.ExtrudeGeometry(s, { depth: 1.4, bevelEnabled: false, curveSegments: 6 });
+  g.rotateX(-Math.PI / 2); g.translate(0, -1.4, 0);
+  var grass = new THREE.Mesh(g, mat(0x86bf6a)); grass.receiveShadow = true; scene.add(grass);
+  var rock = new THREE.Mesh(new THREE.CylinderGeometry(23, 5, 20, 9, 3), mat(0x9a7b5c, { flatShading: true }));
+  var p = rock.geometry.attributes.position;
+  for (var i = 0; i < p.count; i++) { if (p.getY(i) < 9.9) { p.setX(i, p.getX(i) * rnd(0.86, 1.08)); p.setZ(i, p.getZ(i) * rnd(0.86, 1.08)); } }
+  rock.geometry.computeVertexNormals(); rock.position.y = -11.4; scene.add(rock);
+  add(scene, box(41, 0.08, 41), mat(0xc9c2b2), 0, 0.04, 0, true);         // 石板地
+  add(scene, cyl(5.6, 5.6, 0.1, 40), mat(0xd8c9a6), 0, 0.09, 0, true);    // 中央休息區
+  add(scene, cyl(1.1, 1.1, 0.5, 20), mat(0xc98a4b), 0, 0.35, 0);
+  add(scene, cyl(1.5, 1.5, 0.12, 24), mat(0xf3e9d6), 0, 0.66, 0);
+  for (var k = 0; k < 4; k++) {                                            // 沙發
+    var a = k * Math.PI / 2 + Math.PI / 4, sofa = add(scene, box(1.8, 0.6, 0.8), mat(0x6fa7b8), Math.cos(a) * 3.9, 0.4, Math.sin(a) * 3.9);
+    sofa.rotation.y = -a + Math.PI / 2;
+  }
+  [[-21, -21], [21, -21], [-21, 21], [21, 21], [0, -22], [0, 22], [-22, 0], [22, 0], [-10, -22], [11, 22], [-22, 10], [22, -9]].forEach(function (t, i) {
+    var h = 2.2 + (i % 3) * 0.5;
+    add(scene, cyl(0.18, 0.24, 1.4, 6), mat(0x7a5a3c), t[0], 0.7, t[1]);
+    add(scene, ico(1.25), mat(i % 2 ? 0x4f9a52 : 0x5fae5c, { flatShading: true }), t[0], h, t[1]);
+    add(scene, ico(0.85), mat(0x6dba63, { flatShading: true }), t[0] + 0.3, h + 0.95, t[1] - 0.1);
+  });
+})();
+
+/* 雲與星 */
+var clouds = [];
+(function () {
+  var cm = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, transparent: true, opacity: 0.9 });
+  for (var i = 0; i < 9; i++) {
+    var g = new THREE.Group();
+    for (var j = 0; j < 4; j++) { var m = new THREE.Mesh(sph(2.6, 10), cm); m.position.set(j * 2.6 - 4, rnd(-0.4, 0.6), rnd(-1, 1)); m.scale.set(1.3, 0.6, 1); g.add(m); }
+    g.position.set(rnd(-90, 90), rnd(-22, -8), rnd(-90, 90)); g.userData.v = rnd(0.4, 1.1);
+    scene.add(g); clouds.push(g);
+  }
+})();
+var stars = (function () {
+  var n = 500, pos = new Float32Array(n * 3);
+  for (var i = 0; i < n; i++) {
+    var th = Math.random() * Math.PI * 2, ph = Math.acos(rnd(-0.3, 1)), r = 300;
+    pos[i * 3] = r * Math.sin(ph) * Math.cos(th); pos[i * 3 + 1] = r * Math.cos(ph); pos[i * 3 + 2] = r * Math.sin(ph) * Math.sin(th);
+  }
+  var g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  var p = new THREE.Points(g, new THREE.PointsMaterial({ color: 0xffffff, size: 1.6, sizeAttenuation: false, transparent: true, opacity: 0, fog: false }));
+  scene.add(p); return p;
+})();
+
+/* 房間：一個專案一間 */
+var rooms = {}, pickables = [], screenMat = new THREE.MeshStandardMaterial({ color: 0x9fd8ea, emissive: 0x58b7d6, emissiveIntensity: 0.35, roughness: 0.4 });
+var lampMat = new THREE.MeshStandardMaterial({ color: 0xfff1c9, emissive: 0xffc56b, emissiveIntensity: 0 });
+var FLOORS = [0xc79a63, 0xb98a58, 0xd1a871];
+function buildRoom(p, x, z, idx) {
+  var g = new THREE.Group(); g.position.set(x, 0.08, z); scene.add(g);
+  var S = 7, hf = S / 2, wall = mat(0xf1ebdd), wh = 0.9;
+  var floor = add(g, box(S, 0.16, S), mat(FLOORS[idx % 3]), 0, 0.08, 0, true);
+  floor.userData.pid = p.id; pickables.push(floor);
+  add(g, box(S + 0.3, wh, 0.3), wall, 0, wh / 2, -hf);
+  add(g, box(0.3, wh, S), wall, -hf, wh / 2, 0);
+  add(g, box(0.3, wh, S), wall, hf, wh / 2, 0);
+  add(g, box(2.3, wh, 0.3), wall, -2.5, wh / 2, hf);
+  add(g, box(2.3, wh, 0.3), wall, 2.5, wh / 2, hf);
+  var tint = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x000000, roughness: 0.6 });
+  add(g, box(S + 0.34, 0.14, 0.34), tint, 0, wh + 0.07, -hf, true);       // 牆頂狀態色帶
+  add(g, cyl(0.07, 0.07, 2.4, 8), mat(0x3a332c), -hf, 1.2, hf);           // 狀態燈
+  add(g, sph(0.34), tint, -hf, 2.55, hf, true);
+  [-1.8, 1.6].forEach(function (dx) {                                      // 兩張辦公桌
+    add(g, box(1.7, 0.1, 0.85), mat(0xf6f1e6), dx, 0.8, -2.2);
+    add(g, box(0.1, 0.7, 0.75), mat(0xb9895a), dx - 0.7, 0.42, -2.2);
+    add(g, box(0.1, 0.7, 0.75), mat(0xb9895a), dx + 0.7, 0.42, -2.2);
+    add(g, box(0.78, 0.5, 0.06), mat(0x232a30), dx, 1.2, -2.42);
+    add(g, box(0.7, 0.42, 0.02), screenMat, dx, 1.2, -2.385, true);
+    add(g, box(0.08, 0.14, 0.08), mat(0x232a30), dx, 0.92, -2.42);
+  });
+  add(g, box(1.5, 1.3, 0.45), mat(0xa9764a), 0, 0.8, -3.05);              // 書櫃
+  [0xd9534f, 0x3f8fc6, 0xe2b13c, 0x4f9a52].forEach(function (c, i) { add(g, box(0.22, 0.42, 0.3), mat(c), -0.45 + i * 0.3, 1.2, -2.95, true); });
+  add(g, cyl(1.55, 1.55, 0.03, 28), mat(0xe8e3c4), 0.3, 0.18, 1.4, true); // 地毯
+  add(g, cyl(0.28, 0.22, 0.45, 10), mat(0xf4f0e8), 2.75, 0.38, 2.6);      // 盆栽
+  add(g, ico(0.55), mat(0x4f9a52, { flatShading: true }), 2.75, 1.0, 2.6);
+  add(g, cyl(0.05, 0.05, 1.5, 6), mat(0x3a332c), 2.8, 0.9, -2.9);         // 立燈
+  add(g, cyl(0.16, 0.26, 0.3, 10), lampMat, 2.8, 1.75, -2.9, true);
+  rooms[p.id] = {
+    x: x, z: z, tint: tint,
+    seats: [[-1.8, -1.25, Math.PI], [1.6, -1.25, Math.PI], [0.3, 1.4, 0], [-1.5, 1.6, 0.5]].map(function (s) { return { x: x + s[0], z: z + s[1], ry: s[2], by: null }; })
+  };
+}
+function paintRoom(p) {
+  var r = rooms[p.id]; if (!r) return;
+  var c = STATUS[p.status].hex;
+  r.tint.color.setHex(c); r.tint.emissive.setHex(c);
+}
+var plaza = [];
+for (var pi = 0; pi < 8; pi++) { var pa = pi * Math.PI / 4; plaza.push({ x: Math.cos(pa) * 2.7, z: Math.sin(pa) * 2.7, ry: -pa - Math.PI / 2, by: null }); }
+
+/* 角色 */
+function buildAgent(a) {
+  var g = new THREE.Group(), col = new THREE.Color(a.color), light = col.clone().lerp(new THREE.Color(0xffffff), 0.35), dark = mat(0x1d2329);
+  var body = add(g, sph(0.5), mat(col.getHex()), 0, 0.58, 0); body.scale.set(1, 1.08, 1);
+  add(g, sph(0.34), mat(light.getHex()), 0, 0.52, 0.24, true).scale.set(1, 1, 0.6);
+  add(g, sph(0.43), mat(light.getHex()), 0, 1.3, 0);
+  add(g, sph(0.07, 8), dark, -0.15, 1.34, 0.38, true); add(g, sph(0.07, 8), dark, 0.15, 1.34, 0.38, true);
+  add(g, sph(0.16, 8), mat(col.getHex()), -0.22, 0.12, 0.08); add(g, sph(0.16, 8), mat(col.getHex()), 0.22, 0.12, 0.08);
+  var c = mat(col.getHex());
+  if (a.gear === 'antenna') { add(g, cyl(0.03, 0.03, 0.35, 6), dark, 0, 1.85, 0); add(g, sph(0.09, 8), mat(0xffd34d, { emissive: 0xffb000, emissiveIntensity: 0.6 }), 0, 2.05, 0, true); }
+  else if (a.gear === 'cap') { add(g, cyl(0.36, 0.44, 0.22, 16), c, 0, 1.68, 0); add(g, box(0.5, 0.05, 0.3), c, 0, 1.6, 0.42); }
+  else if (a.gear === 'glasses') { [-0.16, 0.16].forEach(function (x) { var t = add(g, new THREE.TorusGeometry(0.12, 0.025, 6, 16), dark, x, 1.34, 0.4, true); t.rotation.set(0, 0, 0); }); }
+  else if (a.gear === 'phones') { add(g, new THREE.TorusGeometry(0.45, 0.04, 6, 20, Math.PI), dark, 0, 1.32, 0, true); add(g, sph(0.14, 8), c, -0.45, 1.3, 0); add(g, sph(0.14, 8), c, 0.45, 1.3, 0); }
+  else if (a.gear === 'visor') { add(g, box(0.62, 0.16, 0.2), mat(0x2a3640, { roughness: 0.3 }), 0, 1.5, 0.3, true); }
+  else if (a.gear === 'bow') { add(g, sph(0.13, 8), mat(0xe2574c), -0.14, 1.74, 0, true); add(g, sph(0.13, 8), mat(0xe2574c), 0.14, 1.74, 0, true); }
+  else if (a.gear === 'leaf') { var lf = add(g, ico(0.2), mat(0x7ed06a, { flatShading: true }), 0.06, 1.86, 0, true); lf.scale.set(0.6, 1.3, 0.6); lf.rotation.z = -0.4; }
+  var hit = add(g, sph(0.95, 8), new THREE.MeshBasicMaterial({ visible: false }), 0, 0.9, 0, true);
+  hit.castShadow = false; hit.receiveShadow = false; hit.userData.aid = a.id; pickables.push(hit);
+  scene.add(g); return g;
+}
+function seatIn(pid, a) {
+  var list = pid ? rooms[pid].seats : plaza, free = list.filter(function (s) { return !s.by; });
+  var s = free.length ? pick(free) : pick(list);
+  if (a.seat && a.seat.by === a.id) a.seat.by = null;
+  if (free.length) s.by = a.id;
+  a.seat = s; a.at = pid;
+}
+function retarget(a, instant) {
+  var live = projects.filter(function (p) { return p.members.indexOf(a.id) >= 0 && STATUS[p.status].active; });
+  var others = live.filter(function (p) { return p.id !== a.at; });
+  var next = others.length ? pick(others).id : (live.length ? live[0].id : null);
+  if (next === a.at && a.seat && !instant) return;
+  seatIn(next, a);
+  if (instant) { a.g.position.set(a.seat.x, 0.16, a.seat.z); a.g.rotation.y = a.seat.ry; a.walking = false; }
+  else a.walking = true;
+  a.nextMove = rnd(9, 20);
+}
+
+/* ───────── 鏡頭 ───────── */
+var HOME = { theta: 0.62, phi: 0.92, radius: 98 };
+var cam = { theta: HOME.theta, phi: HOME.phi, radius: HOME.radius, target: new THREE.Vector3(0, 0, 0) };
+var goal = { theta: cam.theta, phi: cam.phi, radius: cam.radius, target: new THREE.Vector3(0, 0, 0) };
+function flyTo(x, z, radius) { goal.target.set(x, 0, z); goal.radius = radius; }
+function clampGoal() {
+  goal.phi = Math.min(1.35, Math.max(0.3, goal.phi)); goal.radius = Math.min(170, Math.max(14, goal.radius));
+  goal.target.x = Math.min(30, Math.max(-30, goal.target.x)); goal.target.z = Math.min(30, Math.max(-30, goal.target.z));
+}
+function applyCam(dt) {
+  var k = 1 - Math.exp(-dt * 7);
+  cam.theta += (goal.theta - cam.theta) * k; cam.phi += (goal.phi - cam.phi) * k; cam.radius += (goal.radius - cam.radius) * k;
+  cam.target.lerp(goal.target, k);
+  var sp = Math.sin(cam.phi);
+  camera.position.set(cam.target.x + cam.radius * sp * Math.sin(cam.theta), cam.target.y + cam.radius * Math.cos(cam.phi), cam.target.z + cam.radius * sp * Math.cos(cam.theta));
+  camera.lookAt(cam.target);
+}
+var W = 1, H = 1;
+function resize() {
+  var app = $('app'); W = app.clientWidth; H = app.clientHeight;
+  renderer.setSize(W, H, false);
+  camera.aspect = W / H;
+  var side = $('side').getBoundingClientRect(), wide = side.width < W * 0.7;
+  var ox = wide ? -(side.right) / 2 : 0, oy = wide ? 0 : (H - side.top) / 2 - 30;
+  camera.setViewOffset(W, H, ox, oy, W, H);
+  camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe($('app'));
+
+var ptrs = {}, moved = 0, lastPinch = 0, lastMid = null;
+function pan(dx, dy) {
+  var s = cam.radius * 0.0016, st = Math.sin(cam.theta), ct = Math.cos(cam.theta);
+  goal.target.x += (-dx * ct - dy * st) * s; goal.target.z += (dx * st - dy * ct) * s;
+}
+canvas.addEventListener('pointerdown', function (e) {
+  canvas.setPointerCapture(e.pointerId); ptrs[e.pointerId] = { x: e.clientX, y: e.clientY, pan: e.button === 2 || e.shiftKey };
+  if (Object.keys(ptrs).length === 1) moved = 0; lastPinch = 0; lastMid = null;
+});
+canvas.addEventListener('pointermove', function (e) {
+  var p = ptrs[e.pointerId]; if (!p) return;
+  var dx = e.clientX - p.x, dy = e.clientY - p.y; p.x = e.clientX; p.y = e.clientY; moved += Math.abs(dx) + Math.abs(dy);
+  var ids = Object.keys(ptrs);
+  if (ids.length === 1) {
+    if (p.pan) pan(dx, dy); else { goal.theta -= dx * 0.006; goal.phi -= dy * 0.005; }
+  } else if (ids.length === 2) {
+    var a = ptrs[ids[0]], b = ptrs[ids[1]], d = Math.hypot(a.x - b.x, a.y - b.y), mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    if (lastPinch) goal.radius *= lastPinch / d;
+    if (lastMid) pan(mid.x - lastMid.x, mid.y - lastMid.y);
+    lastPinch = d; lastMid = mid;
+  }
+  clampGoal();
+});
+function ptrEnd(e) {
+  var had = ptrs[e.pointerId]; delete ptrs[e.pointerId]; lastPinch = 0; lastMid = null;
+  if (had && e.type === 'pointerup' && moved < 6 && !Object.keys(ptrs).length) pickAt(e.clientX, e.clientY);
+}
+canvas.addEventListener('pointerup', ptrEnd); canvas.addEventListener('pointercancel', ptrEnd);
+canvas.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+canvas.addEventListener('wheel', function (e) { e.preventDefault(); goal.radius *= Math.exp(e.deltaY * 0.0012); clampGoal(); }, { passive: false });
+var ray = new THREE.Raycaster();
+function pickAt(cx, cy) {
+  var r = canvas.getBoundingClientRect();
+  ray.setFromCamera({ x: (cx - r.left) / r.width * 2 - 1, y: -(cy - r.top) / r.height * 2 + 1 }, camera);
+  var hit = ray.intersectObjects(pickables, false)[0];
+  if (!hit) return select(null);
+  select(hit.object.userData.aid || hit.object.userData.pid);
+}
+$('c-in').onclick = function () { goal.radius *= 0.72; clampGoal(); };
+$('c-out').onclick = function () { goal.radius *= 1.38; clampGoal(); };
+$('c-l').onclick = function () { goal.theta -= Math.PI / 4; };
+$('c-r').onclick = function () { goal.theta += Math.PI / 4; };
+$('c-home').onclick = function () { goal.theta = HOME.theta; goal.phi = HOME.phi; flyTo(0, 0, HOME.radius); };
+
+/* ───────── 名牌 ───────── */
+var labels = [];
+function addLabel(kind, id, text, color) {
+  var b = el('button', 'lbl ' + kind);
+  if (kind === 'room') b.appendChild(el('i'));
+  b.appendChild(document.createTextNode(text));
+  b.style.setProperty('--c', color);
+  b.onclick = function () { select(id); };
+  $('labels').appendChild(b);
+  var L = { el: b, kind: kind, id: id }; labels.push(L); return L;
+}
+var v3 = new THREE.Vector3();
+function placeLabels() {
+  var showAgents = cam.radius < 95;
+  labels.forEach(function (L) {
+    if (L.kind === 'room') { var r = rooms[L.id]; v3.set(r.x, 2.9, r.z - 3.4); }
+    else { var a = byId[L.id]; v3.set(a.g.position.x, a.g.position.y + 2.5, a.g.position.z); }
+    v3.project(camera);
+    var vis = v3.z < 1 && (L.kind === 'room' || showAgents || ui.sel === L.id);
+    L.el.hidden = !vis;
+    if (vis) L.el.style.transform = 'translate(-50%,-100%) translate(' + ((v3.x * 0.5 + 0.5) * W).toFixed(1) + 'px,' + ((-v3.y * 0.5 + 0.5) * H).toFixed(1) + 'px)';
+    L.el.classList.toggle('on', ui.sel === L.id);
+  });
+}
+
+/* ───────── 介面 ───────── */
+var FILTERS = [
+  ['all', '全部', function () { return true; }],
+  ['wait', '等你批准', function (p) { return p.status === 'wait'; }],
+  ['stuck', '卡住', function (p) { return p.status === 'stuck'; }],
+  ['live', '進行中', function (p) { return STATUS[p.status].active; }],
+  ['rest', '閒置', function (p) { return p.status === 'idle' || p.status === 'queue'; }]
+];
+function names(ids) { return ids.map(function (i) { return byId[i] ? byId[i].name : i; }).join('、'); }
+function renderChips() {
+  var box = $('chips'); box.textContent = ''; box.hidden = ui.tab !== 'p'; $('q').hidden = ui.tab !== 'p';
+  FILTERS.forEach(function (f) {
+    var b = el('button', '', f[1]); b.appendChild(el('b', '', String(projects.filter(f[2]).length)));
+    b.setAttribute('aria-pressed', ui.filter === f[0]);
+    b.onclick = function () { ui.filter = f[0]; renderChips(); renderList(); };
+    box.appendChild(b);
+  });
+  $('count').textContent = projects.length + ' 專案・' + agents.length + ' 成員';
+}
+function renderList() {
+  var ul = $('list'); ul.textContent = '';
+  if (ui.tab === 'p') {
+    var f = FILTERS.filter(function (x) { return x[0] === ui.filter; })[0][2], q = ui.q.trim().toLowerCase();
+    var rows = projects.filter(function (p) { return f(p) && (!q || p.name.toLowerCase().indexOf(q) >= 0); });
+    rows.forEach(function (p) {
+      var st = STATUS[p.status], li = el('li'), b = el('button');
+      b.style.setProperty('--c', cssVar(st.v)); b.setAttribute('aria-current', ui.sel === p.id);
+      b.appendChild(el('span', 'dot')); b.appendChild(el('span', 'nm', p.name));
+      b.appendChild(el('span', 'pill', st.label));
+      b.appendChild(el('span', 'sub', (st.active && p.members.length ? names(p.members) + '・' : '') + p.task));
+      b.onclick = function () { select(p.id); };
+      li.appendChild(b); ul.appendChild(li);
+    });
+    if (!rows.length) ul.appendChild(el('li', 'empty', q ? '找不到「' + ui.q + '」，換個關鍵字試試。' : '這個狀態目前沒有專案。'));
+  } else {
+    agents.forEach(function (a) {
+      var mine = projects.filter(function (p) { return p.members.indexOf(a.id) >= 0; }), li = el('li'), b = el('button');
+      b.style.setProperty('--c', a.color); b.setAttribute('aria-current', ui.sel === a.id);
+      b.appendChild(el('span', 'ava', a.name.slice(0, 1)));
+      var nm = el('span', 'nm', a.name); nm.appendChild(el('small', '', a.role)); b.appendChild(nm);
+      var pill = el('span', 'pill', a.at ? '工作中' : '休息'); pill.style.setProperty('--c', cssVar(a.at ? '--s-build' : '--s-idle')); b.appendChild(pill);
+      b.appendChild(el('span', 'sub', a.at ? '在 ' + byId[a.at].name + '・負責 ' + mine.length + ' 間' : '休息區待命'));
+      b.onclick = function () { select(a.id); };
+      li.appendChild(b); ul.appendChild(li);
+    });
+  }
+}
+function row(dl, k, v) { dl.appendChild(el('dt', '', k)); dl.appendChild(el('dd', '', v)); }
+function renderDetail() {
+  var d = $('detail'), o = ui.sel && byId[ui.sel];
+  d.hidden = !o; if (!o) return;
+  var keep = d.scrollTop; d.textContent = '';
+  var x = el('button', 'x', '×'); x.setAttribute('aria-label', '關閉'); x.onclick = function () { select(null); }; d.appendChild(x);
+  if (o.members) {
+    var st = STATUS[o.status]; d.style.setProperty('--c', cssVar(st.v));
+    d.appendChild(el('div', 'kind', '專案')); d.appendChild(el('h2', '', o.name)); d.appendChild(el('span', 'state', st.label));
+    var dl = el('dl'); row(dl, '任務', o.task); row(dl, '成員', names(o.members) || '尚未指派');
+    row(dl, '在場', names(agents.filter(function (a) { return a.at === o.id; }).map(function (a) { return a.id; })) || '沒有人');
+    d.appendChild(dl);
+    var bar = el('div', 'bar'), fill = el('i'); fill.style.width = o.progress + '%'; bar.appendChild(fill); d.appendChild(bar);
+    d.appendChild(el('div', 'pct', '進度 ' + Math.round(o.progress) + '%'));
+    var act = { wait: ['批准', approve], stuck: ['重試', retry], idle: ['派新任務', assign], queue: ['立即開始', assign] }[o.status];
+    if (act) { var ab = el('button', 'act', act[0]); ab.onclick = function () { act[1](o); }; d.appendChild(ab); }
+    d.appendChild(el('h3', '', '最近動態'));
+    var ul = el('ul', 'log');
+    o.log.slice(-6).reverse().forEach(function (e) { var li = el('li'); li.appendChild(el('time', '', e.t)); li.appendChild(document.createTextNode(e.m)); ul.appendChild(li); });
+    d.appendChild(ul);
+  } else {
+    d.style.setProperty('--c', o.color);
+    d.appendChild(el('div', 'kind', '成員')); d.appendChild(el('h2', '', o.name)); d.appendChild(el('span', 'state', o.at ? '工作中' : '休息'));
+    var dl2 = el('dl'); row(dl2, '角色', o.role); row(dl2, '位置', o.at ? byId[o.at].name : '休息區'); d.appendChild(dl2);
+    d.appendChild(el('h3', '', '負責的專案'));
+    var links = el('div', 'links');
+    projects.filter(function (p) { return p.members.indexOf(o.id) >= 0; }).forEach(function (p) { var b = el('button', '', p.name); b.onclick = function () { select(p.id); }; links.appendChild(b); });
+    if (!links.children.length) links.appendChild(el('span', 'kind', '目前沒有指派專案'));
+    d.appendChild(links);
+  }
+  d.scrollTop = keep;
+}
+function select(id) {
+  var changed = ui.sel !== id; ui.sel = id;
+  if (id && changed) {
+    var o = byId[id];
+    if (o.members) flyTo(rooms[id].x, rooms[id].z, 50); else flyTo(o.g.position.x, o.g.position.z, 38);
+  }
+  renderList(); renderDetail();
+}
+function refresh() { renderChips(); renderList(); renderDetail(); }
+function setStatus(p, s, task, msg) {
+  p.status = s; if (task) p.task = task; p.log.push({ t: now(), m: msg }); if (p.log.length > 30) p.log.shift();
+  paintRoom(p);
+  var L = labels.filter(function (l) { return l.id === p.id; })[0]; if (L) L.el.style.setProperty('--c', cssVar(STATUS[s].v));
+  agents.forEach(function (a) { if (p.members.indexOf(a.id) >= 0) a.nextMove = Math.min(a.nextMove, rnd(0.3, 2)); });
+}
+function approve(p) { p.progress = 100; setStatus(p, 'idle', '已完成，等待新任務', '你已批准，任務結案'); refresh(); }
+function retry(p) { setStatus(p, 'build', null, '重試中，回到實作'); refresh(); }
+function assign(p) { p.progress = 0; setStatus(p, 'plan', pick(NEXT_TASKS), '派了新任務，開始計畫'); refresh(); }
+
+/* 模擬：示範資料會自己往前跑，接上真實資料後這段可以關掉 */
+function tick() {
+  projects.forEach(function (p) {
+    if (!STATUS[p.status].active) return;
+    if (p.status === 'build' && Math.random() < 0.006) return setStatus(p, 'stuck', null, '外部服務沒回應，卡住了');
+    p.progress = Math.min(100, p.progress + rnd(0.6, 2.6));
+    if (p.progress < 100) return;
+    if (p.status === 'plan') { p.progress = 0; setStatus(p, 'build', null, '計畫完成，開始實作'); }
+    else if (p.status === 'build') { p.progress = 0; setStatus(p, 'review', null, '實作完成，送交審查'); }
+    else setStatus(p, 'wait', '審查通過，等你按下批准', '審查通過，等你批准');
+  });
+  refresh();
+}
+
+$('tab-p').onclick = function () { setTab('p'); }; $('tab-a').onclick = function () { setTab('a'); };
+function setTab(t) { ui.tab = t; $('tab-p').setAttribute('aria-selected', t === 'p'); $('tab-a').setAttribute('aria-selected', t === 'a'); renderChips(); renderList(); }
+$('q').oninput = function () { ui.q = this.value; renderList(); };
+$('t-pause').onclick = function () { ui.paused = !ui.paused; this.setAttribute('aria-pressed', ui.paused); this.textContent = ui.paused ? '繼續動態' : '暫停動態'; };
+function setNight(n) { ui.night = n; $('t-day').setAttribute('aria-pressed', !n); $('t-night').setAttribute('aria-pressed', n); }
+$('t-day').onclick = function () { setNight(false); }; $('t-night').onclick = function () { setNight(true); };
+$('sheetbar').onclick = function () { var c = $('side').classList.toggle('closed'); this.textContent = c ? '展開清單' : '收合清單'; this.setAttribute('aria-expanded', !c); resize(); };
+
+/* ───────── 主迴圈 ───────── */
+var nightK = 0, simT = 0, last = performance.now(), tmpC = new THREE.Color();
+function frame(t) {
+  var dt = Math.min(0.05, (t - last) / 1000); last = t;
+  clampGoal(); applyCam(dt);
+  nightK += ((ui.night ? 1 : 0) - nightK) * (1 - Math.exp(-dt * 3));
+  tmpC.copy(SKY_DAY).lerp(SKY_NIGHT, nightK); scene.background.copy(tmpC); scene.fog.color.copy(tmpC);
+  hemi.intensity = 0.5 - 0.3 * nightK; sun.intensity = 0.62 - 0.46 * nightK; sun.color.setHex(0xfff2dd).lerp(tmpC.setHex(0x9db8ff), nightK);
+  nightLights.forEach(function (l) { l.intensity = l.userData.max * nightK; });
+  stars.material.opacity = nightK; screenMat.emissiveIntensity = 0.35 + 0.9 * nightK; lampMat.emissiveIntensity = 1.4 * nightK;
+  projects.forEach(function (p) { rooms[p.id].tint.emissiveIntensity = 0.25 + 0.75 * nightK; });
+  if (!ui.paused) {
+    simT += dt; if (simT > 2.2) { simT = 0; tick(); }
+    clouds.forEach(function (c) { c.position.x += c.userData.v * dt; if (c.position.x > 100) c.position.x = -100; });
+    var moved = false;
+    agents.forEach(function (a, i) {
+      var g = a.g, s = a.seat;
+      if (a.walking) {
+        var dx = s.x - g.position.x, dz = s.z - g.position.z, d = Math.hypot(dx, dz), step = 7 * dt;
+        if (d <= step) { g.position.x = s.x; g.position.z = s.z; g.position.y = 0.16; g.rotation.y = s.ry; a.walking = false; moved = true; }
+        else { g.position.x += dx / d * step; g.position.z += dz / d * step; g.rotation.y = Math.atan2(dx, dz); g.position.y = 0.16 + Math.abs(Math.sin(t * 0.012 + i)) * 0.3; }
+      } else {
+        g.position.y = 0.16 + (a.at ? Math.abs(Math.sin(t * 0.004 + i * 1.7)) * 0.06 : 0);
+        a.nextMove -= dt; if (a.nextMove <= 0) { var was = a.at; retarget(a); if (a.at !== was) moved = true; }
+      }
+    });
+    if (moved) { renderList(); renderDetail(); }
+  }
+  renderer.render(scene, camera);
+  placeLabels();
+  requestAnimationFrame(frame);
+}
+
+function start(data, live) {
+  loadData(data);
+  $('src').textContent = live ? '即時資料' : '示範資料';
+  var slots = [];
+  for (var j = 0; j < 4; j++) for (var i = 0; i < 4; i++) if (!((i === 1 || i === 2) && (j === 1 || j === 2))) slots.push([(i - 1.5) * 10, (j - 1.5) * 10]);
+  projects = projects.slice(0, slots.length);
+  projects.forEach(function (p, i) {
+    buildRoom(p, slots[i][0], slots[i][1], i); paintRoom(p);
+    addLabel('room', p.id, p.name, cssVar(STATUS[p.status].v));
+  });
+  agents.forEach(function (a) { a.g = buildAgent(a); a.at = undefined; retarget(a, true); a.nextMove = rnd(3, 14); addLabel('agent', a.id, a.name, a.color); });
+  var dark = document.documentElement.getAttribute('data-theme');
+  setNight(dark ? dark === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches);
+  nightK = ui.night ? 1 : 0;
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) $('t-pause').click();
+  resize(); refresh();
+  requestAnimationFrame(frame);
+}
+fetch('office-data.json').then(function (r) { if (!r.ok) throw 0; return r.json(); })
+  .then(function (d) { if (!d.agents || !d.projects) throw 0; start(d, true); })
+  .catch(function () { start(DEMO, false); });
+})();
+</script>
+</body>
+</html>
