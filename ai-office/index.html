@@ -92,6 +92,9 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .sub { grid-column: 2; color: var(--ink-2); font-size: 12.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pill { grid-row: 1 / 3; grid-column: 3; font-size: 12px; font-weight: 700; padding: 3px 8px; border-radius: 7px; color: var(--c); background: color-mix(in srgb, var(--c) 16%, transparent); white-space: nowrap; }
 .empty { padding: 24px 12px; color: var(--ink-2); text-align: center; }
+[hidden] { display: none !important; }
+#note { margin: 8px 10px 0; padding: 8px 10px; border-radius: 10px; background: var(--chip); color: var(--ink-2); font-size: 13px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+#note button { padding: 4px 10px; border-radius: 8px; background: var(--accent); color: var(--accent-ink); font-weight: 700; }
 
 /* 右側詳情 */
 #detail { position: absolute; right: calc(var(--gr) + 58px); top: 68px; width: 330px; max-width: calc(100% - var(--gl) - var(--gr)); max-height: calc(100% - 90px); overflow-y: auto; padding: 16px 18px; box-sizing: border-box; }
@@ -106,7 +109,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .bar { height: 6px; border-radius: 3px; background: var(--chip); overflow: hidden; }
 .bar i { display: block; height: 100%; background: var(--c); border-radius: 3px; transition: width .4s; }
 .pct { text-align: right; color: var(--ink-2); font-size: 12px; margin-top: 4px; font-variant-numeric: tabular-nums; }
-.act { margin-top: 10px; padding: 9px 14px; border-radius: 10px; background: var(--accent); color: var(--accent-ink); font-weight: 700; width: 100%; }
+.act { display: block; box-sizing: border-box; text-align: center; text-decoration: none; margin-top: 10px; padding: 9px 14px; border-radius: 10px; background: var(--accent); color: var(--accent-ink); font-weight: 700; width: 100%; }
 #detail h3 { font-size: 12px; color: var(--ink-2); font-weight: 500; margin: 14px 0 6px; letter-spacing: .06em; }
 .log { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; font-size: 13px; }
 .log time { color: var(--ink-2); font-variant-numeric: tabular-nums; margin-right: 8px; }
@@ -163,6 +166,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 
   <div id="side" class="card">
     <button id="sheetbar" aria-expanded="true">收合清單</button>
+    <div id="note" hidden></div>
     <div id="tabs" role="tablist">
       <button role="tab" id="tab-p" aria-selected="true">專案</button>
       <button role="tab" id="tab-a" aria-selected="false">成員</button>
@@ -189,7 +193,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 'use strict';
 
 /* ───────── 資料 ─────────
-   同資料夾放一份 office-data.json（格式同 DEMO）就會改讀真實資料，否則用示範資料。 */
+   預設是示範資料。同資料夾有 office-data.json（serve.mjs 會提供）就讀本機資料；
+   在 claude.ai 的 Artifact 裡則透過連接器讀雲端工作階段。 */
 var STATUS = {
   build:  { label: '實作中',   v: '--s-build',  hex: 0x23946a, active: true },
   plan:   { label: '計畫中',   v: '--s-plan',   hex: 0x3279c0, active: true },
@@ -227,7 +232,18 @@ var DEMO = {
 var NEXT_TASKS = ['整理待辦與驗收條件', '補齊測試案例', '重構舊模組', '更新說明文件', '對帳上週數字', '評估新做法'];
 
 var agents = [], projects = [], byId = {};
-var ui = { tab: 'p', filter: 'all', q: '', sel: null, paused: false, night: false };
+var ui = { tab: 'p', filter: 'all', q: '', sel: null, paused: false, night: false, live: false };
+/* 真實資料模式下的狀態用語：工作階段沒有「計畫／審查」這種階段，只有在跑、等你、結束 */
+var LIVE_LABEL = { build: '工作中', plan: '計畫中', review: '待審查', wait: '等你回覆', stuck: '失敗', queue: '排隊', idle: '已完成' };
+var LIVE_FILTER = { wait: '等你回覆', stuck: '失敗', rest: '已完成' };
+function lab(s) { return ui.live ? LIVE_LABEL[s] : STATUS[s].label; }
+function occupied(p) { return STATUS[p.status].active || (ui.live && p.status === 'wait'); }
+function ago(iso) {
+  var m = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+  if (!(m >= 0)) return '';
+  if (m < 1) return '剛剛'; if (m < 60) return m + ' 分鐘前'; if (m < 1440) return Math.round(m / 60) + ' 小時前';
+  return Math.round(m / 1440) + ' 天前';
+}
 
 function $(id) { return document.getElementById(id); }
 function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
@@ -237,11 +253,12 @@ function rnd(a, b) { return a + Math.random() * (b - a); }
 function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 
 function loadData(d) {
+  ui.live = !!d.live;
   agents = d.agents.map(function (a) { return Object.assign({}, a); });
   projects = d.projects.map(function (p) {
     var q = Object.assign({ progress: 0, members: [], task: '' }, p);
     if (!STATUS[q.status]) q.status = 'idle';
-    q.log = (p.log || [{ t: now(), m: '開始追蹤：' + q.task }]).slice();
+    q.log = (p.log || [{ t: now(), m: q.task ? '開始追蹤：' + q.task : '開始追蹤' }]).slice();
     return q;
   });
   byId = {};
@@ -348,11 +365,11 @@ var stars = (function () {
 })();
 
 /* 房間：一個專案一間 */
-var rooms = {}, pickables = [], screenMat = new THREE.MeshStandardMaterial({ color: 0x9fd8ea, emissive: 0x58b7d6, emissiveIntensity: 0.35, roughness: 0.4 });
+var rooms = {}, pickables = [], officeObjs = [], screenMat = new THREE.MeshStandardMaterial({ color: 0x9fd8ea, emissive: 0x58b7d6, emissiveIntensity: 0.35, roughness: 0.4 });
 var lampMat = new THREE.MeshStandardMaterial({ color: 0xfff1c9, emissive: 0xffc56b, emissiveIntensity: 0 });
 var FLOORS = [0xc79a63, 0xb98a58, 0xd1a871];
 function buildRoom(p, x, z, idx) {
-  var g = new THREE.Group(); g.position.set(x, 0.08, z); scene.add(g);
+  var g = new THREE.Group(); g.position.set(x, 0.08, z); scene.add(g); officeObjs.push(g);
   var S = 7, hf = S / 2, wall = mat(0xf1ebdd), wh = 0.9;
   var floor = add(g, box(S, 0.16, S), mat(FLOORS[idx % 3]), 0, 0.08, 0, true);
   floor.userData.pid = p.id; pickables.push(floor);
@@ -411,7 +428,7 @@ function buildAgent(a) {
   else if (a.gear === 'leaf') { var lf = add(g, ico(0.2), mat(0x7ed06a, { flatShading: true }), 0.06, 1.86, 0, true); lf.scale.set(0.6, 1.3, 0.6); lf.rotation.z = -0.4; }
   var hit = add(g, sph(0.95, 8), new THREE.MeshBasicMaterial({ visible: false }), 0, 0.9, 0, true);
   hit.castShadow = false; hit.receiveShadow = false; hit.userData.aid = a.id; pickables.push(hit);
-  scene.add(g); return g;
+  scene.add(g); officeObjs.push(g); return g;
 }
 function seatIn(pid, a) {
   var list = pid ? rooms[pid].seats : plaza, free = list.filter(function (s) { return !s.by; });
@@ -421,7 +438,7 @@ function seatIn(pid, a) {
   a.seat = s; a.at = pid;
 }
 function retarget(a, instant) {
-  var live = projects.filter(function (p) { return p.members.indexOf(a.id) >= 0 && STATUS[p.status].active; });
+  var live = projects.filter(function (p) { return p.members.indexOf(a.id) >= 0 && occupied(p); });
   var others = live.filter(function (p) { return p.id !== a.at; });
   var next = others.length ? pick(others).id : (live.length ? live[0].id : null);
   if (next === a.at && a.seat && !instant) return;
@@ -541,7 +558,7 @@ function names(ids) { return ids.map(function (i) { return byId[i] ? byId[i].nam
 function renderChips() {
   var box = $('chips'); box.textContent = ''; box.hidden = ui.tab !== 'p'; $('q').hidden = ui.tab !== 'p';
   FILTERS.forEach(function (f) {
-    var b = el('button', '', f[1]); b.appendChild(el('b', '', String(projects.filter(f[2]).length)));
+    var b = el('button', '', (ui.live && LIVE_FILTER[f[0]]) || f[1]); b.appendChild(el('b', '', String(projects.filter(f[2]).length)));
     b.setAttribute('aria-pressed', ui.filter === f[0]);
     b.onclick = function () { ui.filter = f[0]; renderChips(); renderList(); };
     box.appendChild(b);
@@ -557,8 +574,8 @@ function renderList() {
       var st = STATUS[p.status], li = el('li'), b = el('button');
       b.style.setProperty('--c', cssVar(st.v)); b.setAttribute('aria-current', ui.sel === p.id);
       b.appendChild(el('span', 'dot')); b.appendChild(el('span', 'nm', p.name));
-      b.appendChild(el('span', 'pill', st.label));
-      b.appendChild(el('span', 'sub', (st.active && p.members.length ? names(p.members) + '・' : '') + p.task));
+      b.appendChild(el('span', 'pill', lab(p.status)));
+      b.appendChild(el('span', 'sub', ((ui.live || st.active) && p.members.length ? names(p.members) + '・' : '') + p.task));
       b.onclick = function () { select(p.id); };
       li.appendChild(b); ul.appendChild(li);
     });
@@ -569,7 +586,8 @@ function renderList() {
       b.style.setProperty('--c', a.color); b.setAttribute('aria-current', ui.sel === a.id);
       b.appendChild(el('span', 'ava', a.name.slice(0, 1)));
       var nm = el('span', 'nm', a.name); nm.appendChild(el('small', '', a.role)); b.appendChild(nm);
-      var pill = el('span', 'pill', a.at ? '工作中' : '休息'); pill.style.setProperty('--c', cssVar(a.at ? '--s-build' : '--s-idle')); b.appendChild(pill);
+      var busy = a.at && byId[a.at].status !== 'wait';
+      var pill = el('span', 'pill', !a.at ? '休息' : busy ? '工作中' : '等你回覆'); pill.style.setProperty('--c', cssVar(!a.at ? '--s-idle' : busy ? '--s-build' : '--s-wait')); b.appendChild(pill);
       b.appendChild(el('span', 'sub', a.at ? '在 ' + byId[a.at].name + '・負責 ' + mine.length + ' 間' : '休息區待命'));
       b.onclick = function () { select(a.id); };
       li.appendChild(b); ul.appendChild(li);
@@ -584,23 +602,29 @@ function renderDetail() {
   var x = el('button', 'x', '×'); x.setAttribute('aria-label', '關閉'); x.onclick = function () { select(null); }; d.appendChild(x);
   if (o.members) {
     var st = STATUS[o.status]; d.style.setProperty('--c', cssVar(st.v));
-    d.appendChild(el('div', 'kind', '專案')); d.appendChild(el('h2', '', o.name)); d.appendChild(el('span', 'state', st.label));
-    var dl = el('dl'); row(dl, '任務', o.task); row(dl, '成員', names(o.members) || '尚未指派');
-    row(dl, '在場', names(agents.filter(function (a) { return a.at === o.id; }).map(function (a) { return a.id; })) || '沒有人');
+    d.appendChild(el('div', 'kind', ui.live ? '工作階段' : '專案')); d.appendChild(el('h2', '', o.name)); d.appendChild(el('span', 'state', lab(o.status)));
+    var dl = el('dl'); row(dl, ui.live ? '最新狀況' : '任務', o.task || '沒有摘要'); row(dl, ui.live ? '模型' : '成員', names(o.members) || '尚未指派');
+    if (o.kind) row(dl, '來源', o.kind);
+    if (o.updated && ago(o.updated)) row(dl, '更新', ago(o.updated));
+    if (!ui.live) row(dl, '在場', names(agents.filter(function (a) { return a.at === o.id; }).map(function (a) { return a.id; })) || '沒有人');
     d.appendChild(dl);
-    var bar = el('div', 'bar'), fill = el('i'); fill.style.width = o.progress + '%'; bar.appendChild(fill); d.appendChild(bar);
-    d.appendChild(el('div', 'pct', '進度 ' + Math.round(o.progress) + '%'));
-    var act = { wait: ['批准', approve], stuck: ['重試', retry], idle: ['派新任務', assign], queue: ['立即開始', assign] }[o.status];
-    if (act) { var ab = el('button', 'act', act[0]); ab.onclick = function () { act[1](o); }; d.appendChild(ab); }
+    if (!ui.live) {
+      var bar = el('div', 'bar'), fill = el('i'); fill.style.width = o.progress + '%'; bar.appendChild(fill); d.appendChild(bar);
+      d.appendChild(el('div', 'pct', '進度 ' + Math.round(o.progress) + '%'));
+      var act = { wait: ['批准', approve], stuck: ['重試', retry], idle: ['派新任務', assign], queue: ['立即開始', assign] }[o.status];
+      if (act) { var ab = el('button', 'act', act[0]); ab.onclick = function () { act[1](o); }; d.appendChild(ab); }
+    } else if (o.url) {
+      var link = el('a', 'act', '開啟這個工作階段'); link.href = o.url; link.target = '_blank'; link.rel = 'noopener'; d.appendChild(link);
+    }
     d.appendChild(el('h3', '', '最近動態'));
     var ul = el('ul', 'log');
     o.log.slice(-6).reverse().forEach(function (e) { var li = el('li'); li.appendChild(el('time', '', e.t)); li.appendChild(document.createTextNode(e.m)); ul.appendChild(li); });
     d.appendChild(ul);
   } else {
     d.style.setProperty('--c', o.color);
-    d.appendChild(el('div', 'kind', '成員')); d.appendChild(el('h2', '', o.name)); d.appendChild(el('span', 'state', o.at ? '工作中' : '休息'));
+    d.appendChild(el('div', 'kind', '成員')); d.appendChild(el('h2', '', o.name)); d.appendChild(el('span', 'state', !o.at ? '休息' : byId[o.at].status === 'wait' ? '等你回覆' : '工作中'));
     var dl2 = el('dl'); row(dl2, '角色', o.role); row(dl2, '位置', o.at ? byId[o.at].name : '休息區'); d.appendChild(dl2);
-    d.appendChild(el('h3', '', '負責的專案'));
+    d.appendChild(el('h3', '', ui.live ? '負責的工作階段' : '負責的專案'));
     var links = el('div', 'links');
     projects.filter(function (p) { return p.members.indexOf(o.id) >= 0; }).forEach(function (p) { var b = el('button', '', p.name); b.onclick = function () { select(p.id); }; links.appendChild(b); });
     if (!links.children.length) links.appendChild(el('span', 'kind', '目前沒有指派專案'));
@@ -659,9 +683,9 @@ function frame(t) {
   hemi.intensity = 0.5 - 0.3 * nightK; sun.intensity = 0.62 - 0.46 * nightK; sun.color.setHex(0xfff2dd).lerp(tmpC.setHex(0x9db8ff), nightK);
   nightLights.forEach(function (l) { l.intensity = l.userData.max * nightK; });
   stars.material.opacity = nightK; screenMat.emissiveIntensity = 0.35 + 0.9 * nightK; lampMat.emissiveIntensity = 1.4 * nightK;
-  projects.forEach(function (p) { rooms[p.id].tint.emissiveIntensity = 0.25 + 0.75 * nightK; });
+  projects.forEach(function (p) { if (rooms[p.id]) rooms[p.id].tint.emissiveIntensity = 0.25 + 0.75 * nightK; });
   if (!ui.paused) {
-    simT += dt; if (simT > 2.2) { simT = 0; tick(); }
+    simT += dt; if (simT > 2.2) { simT = 0; if (!ui.live) tick(); }
     clouds.forEach(function (c) { c.position.x += c.userData.v * dt; if (c.position.x > 100) c.position.x = -100; });
     var moved = false;
     agents.forEach(function (a, i) {
@@ -682,27 +706,123 @@ function frame(t) {
   requestAnimationFrame(frame);
 }
 
-function start(data, live) {
-  loadData(data);
-  $('src').textContent = live ? '即時資料' : '示範資料';
-  var slots = [];
-  for (var j = 0; j < 4; j++) for (var i = 0; i < 4; i++) if (!((i === 1 || i === 2) && (j === 1 || j === 2))) slots.push([(i - 1.5) * 10, (j - 1.5) * 10]);
-  projects = projects.slice(0, slots.length);
-  projects.forEach(function (p, i) {
-    buildRoom(p, slots[i][0], slots[i][1], i); paintRoom(p);
-    addLabel('room', p.id, p.name, cssVar(STATUS[p.status].v));
+/* ───────── 資料來源：示範 → 本機 office-data.json → 雲端工作階段 ───────── */
+var SLOTS = [];
+for (var sj = 0; sj < 4; sj++) for (var si = 0; si < 4; si++) if (!((si === 1 || si === 2) && (sj === 1 || sj === 2))) SLOTS.push([(si - 1.5) * 10, (sj - 1.5) * 10]);
+function clearOffice() {
+  officeObjs.forEach(function (o) { scene.remove(o); }); officeObjs.length = 0; pickables.length = 0;
+  labels.forEach(function (L) { L.el.remove(); }); labels.length = 0; rooms = {};
+  plaza.forEach(function (s) { s.by = null; });
+}
+var sig = null;
+function setData(d, srcLabel) {
+  d = { agents: d.agents, projects: d.projects.slice(0, SLOTS.length), live: !!d.live };
+  var s = JSON.stringify([d.live, d.agents.map(function (a) { return a.id; }), d.projects.map(function (p) { return [p.id, p.members]; })]);
+  if (s === sig) {                                   // 房間沒變，只更新內容，角色不用重站位
+    d.projects.forEach(function (n) {
+      var p = byId[n.id], was = p.status;
+      p.name = n.name; p.task = n.task; p.updated = n.updated; p.url = n.url; p.kind = n.kind;
+      var L = labels.filter(function (l) { return l.id === p.id; })[0]; if (L) L.el.lastChild.textContent = p.name;
+      if (was !== n.status) setStatus(p, n.status, null, '狀態變成「' + LIVE_LABEL[n.status] + '」');
+    });
+  } else {
+    clearOffice(); loadData(d);
+    projects.forEach(function (p, i) { buildRoom(p, SLOTS[i][0], SLOTS[i][1], i); paintRoom(p); addLabel('room', p.id, p.name, cssVar(STATUS[p.status].v)); });
+    agents.forEach(function (a) { a.g = buildAgent(a); a.at = undefined; a.seat = null; retarget(a, true); a.nextMove = rnd(3, 14); addLabel('agent', a.id, a.name, a.color); });
+    if (ui.sel && !byId[ui.sel]) ui.sel = null;
+    if (ui.filter !== 'all') ui.filter = 'all';
+  }
+  sig = s; $('src').textContent = srcLabel; refresh();
+}
+function note(text, btn, fn) {
+  var n = $('note'); n.textContent = ''; n.hidden = !text; if (!text) return;
+  n.appendChild(el('span', '', text));
+  if (btn) { var b = el('button', '', btn); b.onclick = fn; n.appendChild(b); }
+}
+function hhmm(ms) { return new Date(ms).toTimeString().slice(0, 5); }
+
+/* 本機：serve.mjs 會提供 office-data.json */
+function loadLocal() {
+  return fetch('office-data.json', { cache: 'no-store' }).then(function (r) { if (!r.ok) throw 0; return r.json(); })
+    .then(function (d) { if (!Array.isArray(d.agents) || !Array.isArray(d.projects)) throw 0; setData(d, (d.source || '即時資料') + '・' + hhmm(Date.now())); return true; });
+}
+
+/* 雲端：透過 Claude Code Remote 連接器讀工作階段清單（只在 claude.ai 的 Artifact 裡有效） */
+var SERVER = 'Claude Code Remote', models = {}, noDetail = false, showingCloud = false;
+var PRESET = {
+  fable:  { name: 'Fable',  color: '#3f9b54', gear: 'leaf' },
+  opus:   { name: 'Opus',   color: '#c0446b', gear: 'glasses' },
+  sonnet: { name: 'Sonnet', color: '#2f74d0', gear: 'antenna' },
+  haiku:  { name: 'Haiku',  color: '#d9a21b', gear: 'bow' },
+  claude: { name: 'Claude', color: '#b5673a', gear: 'cap' }
+};
+function familyOf(model) { var m = /fable|opus|sonnet|haiku/.exec(String(model || '').toLowerCase()); return m ? m[0] : 'claude'; }
+function unwrap(p) {
+  if (typeof p === 'string') { try { p = JSON.parse(p.slice(p.indexOf('{'), p.lastIndexOf('}') + 1)); } catch (e) { return null; } }
+  return p && typeof p === 'object' ? (p.ccr || p) : null;
+}
+var BUCKET = { working: 'build', blocked: 'wait', review_ready: 'review', failed: 'stuck' };
+function toOffice(list) {
+  var seen = {}, ags = [];
+  var ps = list.map(function (s) {
+    var fam = familyOf(models[s.id]), sum = s.post_turn_summary || {};
+    var bucket = String(s.status_bucket || '').replace('SESSION_STATUS_BUCKET_', '').toLowerCase(), st = BUCKET[bucket] || 'idle';
+    if (!seen[fam]) { seen[fam] = 1; ags.push(Object.assign({ id: fam, role: models[s.id] || '模型未知' }, PRESET[fam])); }
+    return {
+      id: s.id, name: s.title || '未命名的工作階段', status: st, members: [fam], updated: s.updated_at,
+      task: sum.needs_action || sum.status_detail || sum.recent_action || (st === 'build' ? '正在工作中' : ''),
+      kind: s.environment_kind === 'bridge' ? '本機（Remote Control）' : '雲端',
+      url: /^session_[A-Za-z0-9]+$/.test(s.id) ? 'https://claude.ai/code/' + s.id : null
+    };
   });
-  agents.forEach(function (a) { a.g = buildAgent(a); a.at = undefined; retarget(a, true); a.nextMove = rnd(3, 14); addLabel('agent', a.id, a.name, a.color); });
+  return { agents: ags, projects: ps, live: true };
+}
+function connectCloud() {
+  if (!window.claude || !window.claude.use) return;
+  window.claude.use('mcp').then(function (mcp) {
+    if (!mcp) return;
+    note('正在讀取你的工作階段…');
+    function onResult(result) {
+      var body = unwrap(result.payload), list = body && (Array.isArray(body.data) ? body.data : Array.isArray(body) ? body : null);
+      if (!list) return note('讀到的資料格式看不懂，目前顯示示範資料。');
+      list = list.filter(function (s) { return s && s.id && s.session_status !== 'SESSION_STATUS_ARCHIVED'; })
+        .sort(function (a, b) { return String(b.updated_at).localeCompare(String(a.updated_at)); }).slice(0, SLOTS.length)
+        .sort(function (a, b) { return String(b.created_at).localeCompare(String(a.created_at)); });
+      var stamp = '雲端即時・' + hhmm((result.cache && result.cache.storedAt) || Date.now());
+      var need = noDetail ? [] : list.filter(function (s) { return !(s.id in models); });
+      var all = Promise.all(need.map(function (s) {
+        return mcp.callTool(SERVER, 'get_session', { session_id: s.id }, { cache: { staleTime: 600000, gcTime: 3600000 } }).then(function (r) {
+          var o = unwrap(r.payload) || {}, ext = o.external_metadata || {}, ctx = o.session_context || {};
+          models[s.id] = ext.last_served_model || ctx.model || o.configured_model || '';
+        }, function (e) { if (e && (e.code === 'not_in_manifest' || e.code === 'blocked_by_policy')) noDetail = true; else models[s.id] = ''; });
+      }));
+      Promise.race([all, new Promise(function (ok) { setTimeout(ok, 8000); })]).then(function () {
+        showingCloud = true; setData(toOffice(list), stamp);
+        note(list.length ? (noDetail ? '讀不到各工作階段用的模型，角色先以 Claude 代表。' : null) : '你目前沒有未封存的工作階段。');
+      });
+    }
+    function demo(msg, btn, fn) { if (showingCloud) { showingCloud = false; setData(DEMO, '示範資料'); } note(msg, btn, fn); }
+    function onError(e) {
+      var c = e && e.code;
+      if (c === 'needs_reauth') demo('Claude Code Remote 的登入過期了：到 claude.ai 設定 → 連接器重新連接。目前顯示示範資料。');
+      else if (c === 'server_not_connected' || c === 'server_not_found' || c === 'selection_required') demo('找不到 Claude Code Remote 連接器：到 claude.ai 設定 → 連接器加入或選定它。目前顯示示範資料。');
+      else if (c === 'approval_required' || c === 'consent_required') demo('需要你允許，這個頁面才能讀取工作階段。', '允許讀取', function () { note('等待你的允許…'); mcp.callTool(SERVER, 'list_sessions', { limit: 30 }).then(onResult, onError); });
+      else if (c === 'not_in_manifest' || c === 'not_granted' || c === 'blocked_by_policy' || c === 'capability_disabled' || c === 'capability_removed') demo('這個頁面沒有獲准讀取你的工作階段，目前顯示示範資料。');
+      else note(showingCloud ? '暫時讀不到最新狀態，畫面是上次的資料，稍後會自動重試。' : '暫時讀不到工作階段，稍後會自動重試。目前顯示示範資料。');
+    }
+    mcp.watchTool(SERVER, 'list_sessions', { limit: 30 }, function (ev) { if (ev.type === 'data') onResult(ev.result); else onError(ev.error); }, { refetchInterval: 60000 });
+  }, function () {});
+}
+
+(function boot() {
+  setData(DEMO, '示範資料');
   var dark = document.documentElement.getAttribute('data-theme');
   setNight(dark ? dark === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches);
   nightK = ui.night ? 1 : 0;
   if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) $('t-pause').click();
-  resize(); refresh();
-  requestAnimationFrame(frame);
-}
-fetch('office-data.json').then(function (r) { if (!r.ok) throw 0; return r.json(); })
-  .then(function (d) { if (!d.agents || !d.projects) throw 0; start(d, true); })
-  .catch(function () { start(DEMO, false); });
+  resize(); requestAnimationFrame(frame);
+  loadLocal().then(function () { setInterval(function () { loadLocal().catch(function () {}); }, 15000); }, connectCloud);
+})();
 })();
 </script>
 </body>
