@@ -94,6 +94,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .empty { padding: 24px 12px; color: var(--ink-2); text-align: center; }
 [hidden] { display: none !important; }
 #note { margin: 8px 10px 0; padding: 8px 10px; border-radius: 10px; background: var(--chip); color: var(--ink-2); font-size: 13px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+#note small { flex-basis: 100%; font-size: 11.5px; opacity: .85; overflow-wrap: anywhere; }
 #note button { padding: 4px 10px; border-radius: 8px; background: var(--accent); color: var(--accent-ink); font-weight: 700; }
 
 /* 右側詳情 */
@@ -734,10 +735,11 @@ function setData(d, srcLabel) {
   }
   sig = s; $('src').textContent = srcLabel; refresh();
 }
-function note(text, btn, fn) {
+function note(text, btn, fn, small) {
   var n = $('note'); n.textContent = ''; n.hidden = !text; if (!text) return;
   n.appendChild(el('span', '', text));
   if (btn) { var b = el('button', '', btn); b.onclick = fn; n.appendChild(b); }
+  if (small) n.appendChild(el('small', '', small));
 }
 function hhmm(ms) { return new Date(ms).toTimeString().slice(0, 5); }
 
@@ -777,14 +779,32 @@ function toOffice(list) {
   });
   return { agents: ags, projects: ps, live: true };
 }
+/* 每一步的結果都記在 diag，讀不到資料時連同原因一起顯示在畫面上，不默默退回示範資料 */
+var diag = {}, localOk = false, watching = false;
+function diagText() { return '診斷：' + Object.keys(diag).map(function (k) { return k + '＝' + diag[k]; }).join('；'); }
+function cloudNote(text, btn, fn) { if (!localOk) note(text, btn, fn, diagText()); }
 function connectCloud() {
-  if (!window.claude || !window.claude.use) return;
-  window.claude.use('mcp').then(function (mcp) {
-    if (!mcp) return;
-    note('正在讀取你的工作階段…');
+  var framed = false; try { framed = window.top !== window; } catch (e) { framed = true; }
+  if (!window.claude || typeof window.claude.use !== 'function') {
+    diag['頁面環境'] = '沒有 window.claude';
+    if (framed) cloudNote('這個檢視環境沒有提供連接器功能，所以只能顯示示範資料。請在 claude.ai 網頁版或桌面版直接開啟這個 Artifact。');
+    return;
+  }
+  diag['頁面環境'] = '有 window.claude';
+  cloudNote('正在連接你的雲端工作階段（最多等 10 秒）…');
+  var use = function (n) { return Promise.resolve().then(function () { return window.claude.use(n); }).catch(function () { return null; }); };
+  Promise.all([use('mcp'), use('permissions')]).then(function (got) {
+    var mcp = got[0], perms = got[1], key = 'mcp:' + SERVER;
+    if (!mcp) {
+      diag['連接器功能'] = '未提供';
+      return cloudNote('這個檢視環境沒有把連接器功能交給頁面，所以沒有跳出詢問，只能顯示示範資料。請在 claude.ai 網頁版或桌面版直接開啟這個 Artifact 再試。', '再試一次', connectCloud);
+    }
+    diag['連接器功能'] = '可用';
+
     function onResult(result) {
       var body = unwrap(result.payload), list = body && (Array.isArray(body.data) ? body.data : Array.isArray(body) ? body : null);
-      if (!list) return note('讀到的資料格式看不懂，目前顯示示範資料。');
+      if (!list) { diag['回應'] = '格式不符'; return cloudNote('連接器有回應，但資料格式和預期不同，目前顯示示範資料。', '再試一次', ask); }
+      diag['回應'] = list.length + ' 筆';
       list = list.filter(function (s) { return s && s.id && s.session_status !== 'SESSION_STATUS_ARCHIVED'; })
         .sort(function (a, b) { return String(b.updated_at).localeCompare(String(a.updated_at)); }).slice(0, SLOTS.length)
         .sort(function (a, b) { return String(b.created_at).localeCompare(String(a.created_at)); });
@@ -797,21 +817,57 @@ function connectCloud() {
         }, function (e) { if (e && (e.code === 'not_in_manifest' || e.code === 'blocked_by_policy')) noDetail = true; else models[s.id] = ''; });
       }));
       Promise.race([all, new Promise(function (ok) { setTimeout(ok, 8000); })]).then(function () {
+        if (localOk) return;
         showingCloud = true; setData(toOffice(list), stamp);
-        note(list.length ? (noDetail ? '讀不到各工作階段用的模型，角色先以 Claude 代表。' : null) : '你目前沒有未封存的工作階段。');
+        if (!list.length) note('已連上，但你目前沒有未封存的工作階段。');
+        else if (noDetail) note('已連上。讀不到各工作階段用的模型，角色先以 Claude 代表。');
+        else note(null);
+        if (!watching) { watching = true; mcp.watchTool(SERVER, 'list_sessions', { limit: 30 }, function (ev) { if (ev.type === 'data') onResult(ev.result); else onError(ev.error, true); }, { refetchInterval: 60000 }); }
       });
     }
-    function demo(msg, btn, fn) { if (showingCloud) { showingCloud = false; setData(DEMO, '示範資料'); } note(msg, btn, fn); }
-    function onError(e) {
-      var c = e && e.code;
-      if (c === 'needs_reauth') demo('Claude Code Remote 的登入過期了：到 claude.ai 設定 → 連接器重新連接。目前顯示示範資料。');
-      else if (c === 'server_not_connected' || c === 'server_not_found' || c === 'selection_required') demo('找不到 Claude Code Remote 連接器：到 claude.ai 設定 → 連接器加入或選定它。目前顯示示範資料。');
-      else if (c === 'approval_required' || c === 'consent_required') demo('需要你允許，這個頁面才能讀取工作階段。', '允許讀取', function () { note('等待你的允許…'); mcp.callTool(SERVER, 'list_sessions', { limit: 30 }).then(onResult, onError); });
-      else if (c === 'not_in_manifest' || c === 'not_granted' || c === 'blocked_by_policy' || c === 'capability_disabled' || c === 'capability_removed') demo('這個頁面沒有獲准讀取你的工作階段，目前顯示示範資料。');
-      else note(showingCloud ? '暫時讀不到最新狀態，畫面是上次的資料，稍後會自動重試。' : '暫時讀不到工作階段，稍後會自動重試。目前顯示示範資料。');
+    function demo(msg, btn, fn) { if (showingCloud) { showingCloud = false; setData(DEMO, '示範資料'); } cloudNote(msg, btn, fn); }
+    function onError(e, fromWatch) {
+      var c = (e && e.code) || 'unknown';
+      diag['錯誤'] = c + (e && e.message ? '（' + String(e.message).slice(0, 120) + '）' : '');
+      if (c === 'needs_reauth') demo('Claude Code Remote 的登入過期了：到 claude.ai 設定 → 連接器重新連接後再試。目前顯示示範資料。', '再試一次', ask);
+      else if (c === 'server_not_connected' || c === 'server_not_found' || c === 'selection_required') demo('你的帳號找不到可用的 Claude Code Remote 連接器：到 claude.ai 設定 → 連接器加入或選定它後再試。目前顯示示範資料。', '再試一次', ask);
+      else if (c === 'approval_required' || c === 'consent_required') demo('需要你允許，這個頁面才能讀取工作階段。', '允許讀取', ask);
+      else if (c === 'not_in_manifest' && diag['有列出工作階段工具'] === '否') demo('你的 Claude Code Remote 連接器在這個頁面裡沒有提供「列出工作階段」的工具，所以頁面本身讀不到工作階段。目前顯示示範資料。');
+      else if (c === 'not_in_manifest') demo('這個頁面沒有獲准使用 Claude Code Remote（可能之前按了拒絕，或你的連接器沒有「列出工作階段」這個工具）。目前顯示示範資料。', perms ? '開啟權限設定' : '再試一次', perms ? manage : ask);
+      else if (c === 'blocked_by_policy') demo('你的組織政策不允許這個頁面讀取工作階段，目前顯示示範資料。');
+      else if (c === 'not_granted' || c === 'capability_disabled' || c === 'capability_removed') demo('這個檢視環境沒有開放連接器功能，目前顯示示範資料。請在 claude.ai 網頁版或桌面版直接開啟這個 Artifact。', '再試一次', ask);
+      else if (c === 'tool_error') demo('連接器回報讀取失敗，目前顯示示範資料。', '再試一次', ask);
+      else if (fromWatch && showingCloud) cloudNote('暫時讀不到最新狀態，畫面是上次的資料，稍後會自動重試。', '立刻重試', ask);
+      else demo('讀取工作階段失敗，目前顯示示範資料。', '再試一次', ask);
     }
-    mcp.watchTool(SERVER, 'list_sessions', { limit: 30 }, function (ev) { if (ev.type === 'data') onResult(ev.result); else onError(ev.error); }, { refetchInterval: 60000 });
-  }, function () {});
+    function load() { cloudNote('正在讀取你的工作階段…如果跳出詢問，請按允許。'); mcp.callTool(SERVER, 'list_sessions', { limit: 30 }, { cache: false }).then(onResult, onError); }
+    /* 由按鈕觸發：先明確請求授權，再讀取 */
+    function ask() {
+      delete diag['錯誤'];
+      if (!perms) return load();
+      cloudNote('等待你的允許…');
+      perms.request([key]).then(function (r) { diag['授權狀態'] = (r && r[key]) || '未知'; }, function () {}).then(function () {
+        if (diag['授權狀態'] === 'denied') return demo('你拒絕了這個頁面使用 Claude Code Remote，所以顯示示範資料。要改變主意，請從權限設定重新開啟。', '開啟權限設定', manage);
+        load();
+      });
+    }
+    function manage() { perms.manage().then(ask, function () { cloudNote('打不開權限設定。請從這個 Artifact 右上角選單的「權限」把 Claude Code Remote 打開，再重新整理。', '再試一次', ask); }); }
+
+    var st = perms ? perms.state(key).catch(function () { return 'unavailable'; }) : Promise.resolve('無法查詢');
+    var tools = mcp.listTools(SERVER).then(function (r) {
+      var sv = (r && r.servers || [])[0];
+      if (!sv) return '未列出';
+      var names = (sv.tools || []).map(function (t) { return t.name; });
+      diag['有列出工作階段工具'] = names.indexOf('list_sessions') >= 0 ? '是' : '否';
+      return sv.authStatus + '，' + names.length + ' 個工具';
+    }, function (e) { return '查詢失敗（' + ((e && e.code) || 'unknown') + '）'; });
+    Promise.all([st, tools]).then(function (r) {
+      diag['授權狀態'] = r[0]; diag['連接器'] = r[1];
+      if (r[0] === 'denied') return demo('你之前拒絕了這個頁面使用 Claude Code Remote，所以顯示示範資料。', '開啟權限設定', manage);
+      if (r[0] === 'unavailable') return demo('這個檢視環境無法詢問你是否允許連接器，所以沒有跳出詢問。可以按下面的按鈕直接試一次。', '連接雲端工作階段', load);
+      load();
+    });
+  });
 }
 
 (function boot() {
@@ -821,7 +877,8 @@ function connectCloud() {
   nightK = ui.night ? 1 : 0;
   if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) $('t-pause').click();
   resize(); requestAnimationFrame(frame);
-  loadLocal().then(function () { setInterval(function () { loadLocal().catch(function () {}); }, 15000); }, connectCloud);
+  loadLocal().then(function () { localOk = true; note(null); setInterval(function () { loadLocal().catch(function () {}); }, 15000); }, function () {});
+  connectCloud();
 })();
 })();
 </script>
