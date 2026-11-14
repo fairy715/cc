@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>方塊突擊 Block Strike</title>
+<style>
+  :root { --t: #e2552f; --d: #2f7be0; --ink: #1c1f26; --gold: #ffc93c; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #111; color: #fff;
+    font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif; user-select: none; }
+  canvas#c { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  .hide { display: none !important; }
+  .panel { background: rgba(20, 24, 32, .82); border: 3px solid #000; border-radius: 10px; box-shadow: 0 4px 0 #000; }
+
+  /* 主選單 */
+  #menu { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; overflow: auto;
+    background: linear-gradient(#6fb8f5, #f1d9a0 70%, #d9b06a); }
+  #menu .box { width: min(860px, 94vw); padding: 26px 30px; color: #fff; margin: 16px 0; }
+  h1 { margin: 0; font-size: 46px; letter-spacing: 4px; text-shadow: 0 4px 0 #000; }
+  h1 small { display: block; font-size: 15px; letter-spacing: 6px; color: var(--gold); text-shadow: 0 2px 0 #000; }
+  h2 { font-size: 15px; margin: 20px 0 8px; color: var(--gold); letter-spacing: 2px; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .opt { flex: 1 1 150px; padding: 12px 14px; border: 3px solid #000; border-radius: 8px; background: #3a4150;
+    cursor: pointer; box-shadow: 0 4px 0 #000; font-size: 17px; font-weight: 700; color: #fff; text-align: left; font-family: inherit; }
+  .opt span { display: block; font-size: 12px; font-weight: 400; opacity: .8; margin-top: 3px; }
+  .opt:hover { filter: brightness(1.15); }
+  .opt.on { background: #2fa84f; transform: translateY(2px); box-shadow: 0 2px 0 #000; }
+  .opt.on.t { background: var(--t); } .opt.on.d { background: var(--d); }
+  #start { margin-top: 22px; width: 100%; padding: 16px; font-size: 24px; font-weight: 800; letter-spacing: 6px; color: #1c1f26;
+    background: var(--gold); border: 3px solid #000; border-radius: 10px; box-shadow: 0 5px 0 #000; cursor: pointer; font-family: inherit; }
+  #start:active { transform: translateY(3px); box-shadow: 0 2px 0 #000; }
+  .keys { font-size: 13px; line-height: 1.9; opacity: .92; }
+  kbd { background: #fff; color: #111; border-radius: 4px; padding: 1px 6px; font-weight: 700; border-bottom: 2px solid #999; font-family: inherit; }
+
+  /* HUD */
+  #hud { position: fixed; inset: 0; pointer-events: none; font-weight: 800; text-shadow: 0 2px 0 #000; }
+  #top { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 0; }
+  #top div { padding: 6px 16px; font-size: 22px; border: 3px solid #000; min-width: 70px; text-align: center; }
+  #sT { background: var(--t); border-radius: 8px 0 0 8px; } #sD { background: var(--d); border-radius: 0 8px 8px 0; }
+  #top small { font-size: 11px; display: block; opacity: .9; }
+  #timer { background: var(--ink); min-width: 96px !important; border-left: 0 !important; border-right: 0 !important; }
+  #timer.bomb { color: #ff5a4a; }
+  #bl { position: absolute; left: 16px; bottom: 14px; display: flex; gap: 10px; }
+  #br { position: absolute; right: 16px; bottom: 14px; text-align: right; }
+  .stat { padding: 8px 14px; font-size: 30px; min-width: 110px; }
+  .stat small { font-size: 12px; display: block; opacity: .8; }
+  #ammo { font-size: 34px; } #wname { font-size: 14px; opacity: .9; } #money { color: #7dff8a; font-size: 20px; margin-bottom: 6px; }
+  #mini { position: absolute; left: 12px; top: 12px; border: 3px solid #000; border-radius: 8px; background: rgba(0,0,0,.5); }
+  #feed { position: absolute; right: 12px; top: 12px; text-align: right; font-size: 14px; }
+  #feed div { margin-bottom: 4px; padding: 3px 8px; background: rgba(0,0,0,.55); border-radius: 5px; display: inline-block; clear: both; float: right; }
+  .ct { color: #ff8a66; } .cd { color: #7db4ff; }
+  #cross { position: absolute; left: 50%; top: 50%; width: 26px; height: 26px; margin: -13px; }
+  #cross i { position: absolute; background: #5dff6a; box-shadow: 0 0 0 1px #000; }
+  #cross i:nth-child(1) { left: 12px; top: 0; width: 2px; height: 8px; } #cross i:nth-child(2) { left: 12px; bottom: 0; width: 2px; height: 8px; }
+  #cross i:nth-child(3) { top: 12px; left: 0; height: 2px; width: 8px; } #cross i:nth-child(4) { top: 12px; right: 0; height: 2px; width: 8px; }
+  #cross.hit i { background: #ff3b30; }
+  #msg { position: absolute; top: 22%; left: 0; right: 0; text-align: center; font-size: 34px; letter-spacing: 3px; }
+  #sub { position: absolute; top: 64%; left: 0; right: 0; text-align: center; font-size: 17px; }
+  #prog { position: absolute; top: 70%; left: 50%; width: 260px; height: 16px; margin-left: -130px; border: 3px solid #000; border-radius: 6px; background: #222; }
+  #prog i { display: block; height: 100%; background: var(--gold); width: 0; }
+  #hurt { position: absolute; inset: 0; box-shadow: inset 0 0 160px 40px rgba(255, 0, 0, .75); opacity: 0; }
+  #scope { position: absolute; inset: 0; background:
+    linear-gradient(#000, #000) center/100% 2px no-repeat, linear-gradient(#000, #000) center/2px 100% no-repeat,
+    radial-gradient(circle at center, transparent 0, transparent 34vh, #000 34.4vh); }
+  #buy { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); padding: 18px 24px; width: 360px; font-size: 17px; }
+  #buy h3 { margin: 0 0 10px; color: var(--gold); } #buy p { margin: 7px 0; display: flex; justify-content: space-between; }
+  #buy .no { opacity: .4; }
+  #pause, #over { position: fixed; inset: 0; background: rgba(0, 0, 0, .6); display: flex; align-items: center; justify-content: center;
+    flex-direction: column; font-size: 30px; font-weight: 800; text-shadow: 0 3px 0 #000; cursor: pointer; text-align: center; }
+  #pause small, #over small { font-size: 16px; font-weight: 400; margin-top: 12px; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="hud" class="hide">
+  <canvas id="mini" width="180" height="150"></canvas>
+  <div id="top"><div id="sT">0<small>進攻</small></div><div id="timer">1:45</div><div id="sD">0<small>防守</small></div></div>
+  <div id="feed"></div>
+  <div id="cross"><i></i><i></i><i></i><i></i></div>
+  <div id="scope" class="hide"></div>
+  <div id="hurt"></div>
+  <div id="msg"></div>
+  <div id="sub"></div>
+  <div id="prog" class="hide"><i></i></div>
+  <div id="bl"><div class="panel stat"><small>生命</small><span id="hp">100</span></div><div class="panel stat"><small>護甲</small><span id="ar">0</span></div></div>
+  <div id="br"><div id="money">$800</div><div class="panel stat"><span id="wname">手槍</span><div id="ammo">12 / 48</div></div></div>
+  <div id="buy" class="panel hide"></div>
+</div>
+
+<div id="pause" class="hide">點一下繼續<small>滑鼠已解除鎖定，遊戲暫停中</small></div>
+<div id="over" class="hide"></div>
+
+<div id="menu">
+  <div class="box panel">
+    <h1>方塊突擊<small>BLOCK STRIKE · 5 對 5 爆破模式</small></h1>
+    <h2>地圖</h2><div class="row" id="optMap"></div>
+    <h2>陣營</h2>
+    <div class="row" id="optTeam">
+      <button class="opt t on" data-v="T">進攻方<span>到 A 或 B 點安裝炸彈</span></button>
+      <button class="opt d" data-v="D">防守方<span>守住包點、拆除炸彈</span></button>
+    </div>
+    <h2>電腦難度</h2>
+    <div class="row" id="optDiff">
+      <button class="opt" data-v="0">新手</button><button class="opt on" data-v="1">一般</button><button class="opt" data-v="2">老手</button>
+    </div>
+    <h2>操作</h2>
+    <div class="keys">
+      <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 移動　<kbd>空白</kbd> 跳　<kbd>C</kbd> 蹲　<kbd>Shift</kbd> 靜步　滑鼠左鍵 射擊　右鍵 開鏡（狙擊槍）<br>
+      <kbd>R</kbd> 換彈　<kbd>1</kbd> 主武器 <kbd>2</kbd> 手槍 <kbd>3</kbd> 小刀　<kbd>B</kbd> 購買（回合開始 20 秒內）　按住 <kbd>E</kbd> 安裝／拆除炸彈
+    </div>
+    <button id="start">開始遊戲</button>
+  </div>
+</div>
+
+<script type="module" src="./game.js"></script>
+</body>
+</html>
